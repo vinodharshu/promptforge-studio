@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Updated Title -->
+    <title>PromptForge Studio</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- JSZip & FileSaver -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <style>
+        body { background-color: #0b0f19; font-family: system-ui, -apple-system, sans-serif; }
+        .glass-card { background: rgba(23, 31, 51, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(244, 114, 182, 0.15); }
+        .gradient-btn { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+        .gradient-btn:hover { background: linear-gradient(135deg, #db2777, #7c3aed); }
+        .update-btn { background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+        .update-btn:hover { background: linear-gradient(135deg, #2563eb, #7c3aed); }
+        .soft-glow { box-shadow: 0 0 15px rgba(236, 72, 153, 0.25); }
+        .view-desktop { width: 100%; height: 100%; transition: width 0.3s ease; }
+        .view-tablet { width: 768px; height: 100%; transition: width 0.3s ease; }
+        .view-mobile { width: 375px; height: 100%; transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="text-slate-200 h-screen flex flex-col overflow-hidden relative">
+
+    <!-- Toast Notification Box -->
+    <div id="toast-danger" class="fixed top-5 right-5 hidden flex items-center w-full max-w-xs p-4 text-red-200 bg-red-900/90 backdrop-blur-md rounded-xl shadow-2xl border border-red-500/30 transition-all duration-300 z-50">
+        <div class="inline-flex items-center justify-center flex-shrink-0 w-8 h-8 text-red-200 bg-red-800/50 rounded-lg">
+            <svg class="w-5 h-5" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5Zm3.707 11.793a1 1 0 1 1-1.414 1.414L10 11.414l-2.293 2.293a1 1 0 0 1-1.414-1.414L8.586 10 6.293 7.707a1 1 0 0 1 1.414-1.414L10 8.586l2.293-2.293a1 1 0 0 1 1.414 1.414L11.414 10l2.293 2.293Z"/>
+            </svg>
+        </div>
+        <div id="toast-message" class="ms-3 text-sm font-medium">Invalid credentials!</div>
+    </div>
+
+    <!-- Dynamic Loading Overlay -->
+    <div id="loadingOverlay" class="hidden absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center gap-3">
+        <div class="w-10 h-10 border-4 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-sm font-semibold text-pink-300 animate-pulse">Generating Application with Gemini AI...</span>
+    </div>
+
+    <!-- Header Section with PromptForge Studio Name & Tagline -->
+    <header class="h-16 glass-card px-6 flex items-center justify-between border-b border-pink-500/10">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-xl gradient-btn flex items-center justify-center font-bold text-white soft-glow">
+                <i class="fa-solid fa-wand-magic-sparkles text-sm"></i>
+            </div>
+            <div class="flex flex-col">
+                <span class="font-extrabold text-lg tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-300 to-indigo-400 flex items-center gap-2">
+                    PromptForge Studio 
+                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30 font-normal">Pro Edition</span>
+                </span>
+                <span class="text-[10px] text-slate-400 hidden sm:block">Instant AI-Powered Prototyping and Logic Visualization Engine</span>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <!-- User Status & Logout -->
+            <div id="user-info" style="display: none;" class="text-xs text-slate-300 flex items-center gap-2">
+                <span>Welcome, <b id="username-display" class="text-pink-300"></b>!</span>
+                <button onclick="logoutUser()" class="bg-red-500/80 hover:bg-red-600 text-white px-2.5 py-1 rounded-lg text-xs transition">Logout</button>
+            </div>
+
+            <div id="status" class="text-xs px-3 py-1.5 rounded-full glass-card border border-pink-500/20 text-slate-300 flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Ready to build
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="flex flex-1 h-[calc(100vh-64px)] overflow-hidden">
+        
+        <!-- Sidebar -->
+        <aside class="w-80 glass-card p-4 flex flex-col justify-between border-r border-pink-500/10 shrink-0 overflow-y-auto">
+            <div class="space-y-4">
+                
+                <!-- API Key Section with Direct AI Studio Link -->
+                <div class="p-3 rounded-2xl glass-card border border-pink-500/10">
+                    <label class="text-[11px] font-semibold text-pink-300/80 mb-1 flex items-center gap-1">
+                        <i class="fa-solid fa-key"></i> Gemini API Key (Optional)
+                    </label>
+                    <input type="password" id="customApiKey" 
+                        class="w-full bg-slate-950/70 border border-pink-500/20 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-pink-400"
+                        placeholder="Leave blank to use Free Server Key">
+                    <p class="text-[10px] text-slate-400 mt-1.5">
+                        Quota exceeded? 
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-pink-400 hover:underline font-semibold">
+                            Click here to get a new API Key ↗
+                        </a>
+                    </p>
+                </div>
+
+                <!-- Search & History Feature -->
+                <div class="p-3 rounded-2xl glass-card border border-pink-500/10 space-y-2">
+                    <label class="text-xs font-bold uppercase tracking-wider text-pink-300/80 flex items-center gap-1.5">
+                        <i class="fa-solid fa-magnifying-glass"></i> Custom Search
+                    </label>
+                    <div class="flex gap-2">
+                        <input type="text" id="searchInput" placeholder="Search query..." 
+                            class="w-full bg-slate-950/70 border border-pink-500/20 rounded-xl px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-pink-400">
+                        <button onclick="saveAndSearch()" class="gradient-btn px-3 py-1 rounded-xl text-xs font-semibold text-white">Search</button>
+                    </div>
+                    <div class="flex justify-between items-center pt-2">
+                        <span class="text-[11px] font-semibold text-purple-300">Search History</span>
+                        <button onclick="clearSearchHistory()" class="text-[10px] text-red-400 hover:underline">Clear History</button>
+                    </div>
+                    <ul id="userSearchHistoryList" class="max-h-24 overflow-y-auto text-xs space-y-1 text-slate-400"></ul>
+                </div>
+
+                <!-- Input Box -->
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="text-xs font-bold uppercase tracking-wider text-pink-300/80 flex items-center gap-1.5">
+                            <i class="fa-solid fa-pen-nib"></i> Enter Prompt
+                        </label>
+                        <button onclick="enhancePrompt()" title="Auto-expand prompt with UI details" 
+                            class="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-lg hover:bg-purple-500/40 transition flex items-center gap-1">
+                            <i class="fa-solid fa-bolt text-amber-400"></i> Enhance ✨
+                        </button>
+                    </div>
+
+                    <textarea id="promptInput" rows="3" 
+                        class="w-full bg-slate-950/70 border border-pink-500/20 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-pink-400 transition resize-none placeholder-slate-500"
+                        placeholder="e.g., Create a habit tracker app..."></textarea>
+                    
+                    <div class="grid grid-cols-2 gap-2 mt-3">
+                        <button onclick="generateApp('new')" 
+                            class="gradient-btn text-white font-semibold py-2 rounded-xl text-xs transition soft-glow flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-plus"></i> New App
+                        </button>
+
+                        <button id="updateBtn" onclick="generateApp('update')" disabled 
+                            class="update-btn text-white font-semibold py-2 rounded-xl text-xs transition opacity-50 cursor-not-allowed flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-rotate"></i> Update App
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Export Options -->
+                <div id="exportOptions" style="display:none;" class="grid grid-cols-2 gap-2">
+                    <button onclick="downloadCode()" 
+                        class="bg-emerald-500/10 border border-emerald-400/30 text-emerald-300 font-semibold py-2 rounded-xl text-xs hover:bg-emerald-500/20 transition flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-file-code"></i> HTML
+                    </button>
+                    <button onclick="downloadZip()" 
+                        class="bg-indigo-500/10 border border-indigo-400/30 text-indigo-300 font-semibold py-2 rounded-xl text-xs hover:bg-indigo-500/20 transition flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-file-zipper"></i> ZIP Project
+                    </button>
+                </div>
+
+                <!-- History -->
+                <div class="pt-3 border-t border-pink-500/10">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs font-bold uppercase tracking-wider text-purple-300/80 flex items-center gap-1.5">
+                            <i class="fa-solid fa-clock-rotate-left"></i> Saved Creations
+                        </span>
+                        <button onclick="clearAllHistory()" class="text-[10px] text-red-400 hover:underline">Clear All</button>
+                    </div>
+                    <div id="historyList" class="space-y-2 max-h-36 overflow-y-auto pr-1"></div>
+                </div>
+            </div>
+
+            <div class="text-[11px] text-pink-300/40 text-center pt-2 border-t border-pink-500/10">
+                ✨ Soft Unisex Aesthetic UI
+            </div>
+        </aside>
+
+        <!-- Preview Area -->
+        <main class="flex-1 bg-slate-950 p-4 flex flex-col items-center overflow-hidden">
+            <div class="w-full flex justify-between items-center mb-3 shrink-0">
+                <div class="flex gap-2 p-1 glass-card rounded-xl border border-pink-500/10">
+                    <button id="tabPreview" onclick="switchTab('preview')" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-pink-500 to-purple-500 text-white">Live Preview</button>
+                    <button id="tabCode" onclick="switchTab('code')" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200">Source Code</button>
+                </div>
+
+                <div id="viewControls" class="flex items-center gap-1 p-1 glass-card rounded-xl border border-pink-500/10 text-xs text-slate-400">
+                    <button onclick="setViewport('desktop')" id="btnDesktop" class="px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-300 font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-desktop"></i> Desktop
+                    </button>
+                    <button onclick="setViewport('tablet')" id="btnTablet" class="px-3 py-1.5 rounded-lg hover:text-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-tablet"></i> Tablet
+                    </button>
+                    <button onclick="setViewport('mobile')" id="btnMobile" class="px-3 py-1.5 rounded-lg hover:text-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-mobile"></i> Mobile
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview Frame -->
+            <div id="frameContainer" class="w-full flex-1 flex justify-center items-center overflow-hidden bg-slate-900/50 rounded-2xl border border-pink-500/10 p-2">
+                <iframe id="previewFrame" sandbox="allow-scripts allow-forms allow-popups" class="view-desktop rounded-xl bg-white border-0 shadow-2xl"></iframe>
+                <textarea id="codeView" readonly class="hidden w-full h-full rounded-xl bg-slate-900 p-4 font-mono text-xs text-pink-300 overflow-auto outline-none border border-pink-500/20"></textarea>
+            </div>
+        </main>
+    </div>
+
+    <!-- Login / Register Modal Container -->
+    <div id="authModal" class="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+        <div class="bg-gray-900 text-white p-6 rounded-2xl w-full max-w-md shadow-2xl border border-gray-800">
+            <h2 id="modalTitle" class="text-2xl font-bold mb-4 text-purple-400">Login to PromptForge Studio</h2>
+            
+            <input type="text" id="username" placeholder="Username" class="w-full p-3 mb-3 bg-gray-800 rounded border border-gray-700 outline-none focus:border-purple-500">
+            <input type="password" id="password" placeholder="Password" class="w-full p-3 mb-4 bg-gray-800 rounded border border-gray-700 outline-none focus:border-purple-500">
+            
+            <button onclick="handleAuth()" id="authBtn" class="w-full bg-purple-600 hover:bg-purple-700 font-bold py-3 rounded-lg transition">Login</button>
+            
+            <p class="text-sm text-gray-400 mt-4 text-center">
+                <span id="toggleText">New user?</span> 
+                <button onclick="toggleAuthMode()" id="toggleBtn" class="text-purple-400 underline font-semibold">Sign Up here</button>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        let currentCode = "";
+        let historyData = [];
+        let isSignUp = false;
+
+        function showErrorToast(message) {
+            const toast = document.getElementById('toast-danger');
+            const toastMsg = document.getElementById('toast-message');
+            
+            if (toast && toastMsg) {
+                toastMsg.innerText = message;
+                toast.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    toast.classList.add('hidden');
+                }, 4000);
+            }
+        }
+
+        function toggleAuthMode() {
+            isSignUp = !isSignUp;
+            document.getElementById('modalTitle').innerText = isSignUp ? 'Create New Account' : 'Login to PromptForge Studio';
+            document.getElementById('authBtn').innerText = isSignUp ? 'Register' : 'Login';
+            document.getElementById('toggleText').innerText = isSignUp ? 'Already have an account?' : 'New user?';
+            document.getElementById('toggleBtn').innerText = isSignUp ? 'Login here' : 'Sign Up here';
+        }
+
+        async function handleAuth() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value.trim();
+            
+            if(!username || !password) {
+                showErrorToast("Please enter username and password!");
+                return;
+            }
+
+            const endpoint = isSignUp ? '/api/register' : '/api/login';
+            
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await res.json();
+                
+                if (res.ok && data.status === 'success') {
+                    if (isSignUp) {
+                        alert("Account created! Now login.");
+                        toggleAuthMode();
+                    } else {
+                        document.getElementById('authModal').classList.add('hidden');
+                        location.reload();
+                    }
+                } else {
+                    showErrorToast(data.message || 'Login failed. Invalid username or password!');
+                }
+            } catch(err) {
+                showErrorToast("Network error. Please try again!");
+            }
+        }
+
+        async function checkUserStatus() {
+            try {
+                const res = await fetch('/api/user-status');
+                const data = await res.json();
+                const userInfo = document.getElementById('user-info');
+                const usernameDisplay = document.getElementById('username-display');
+
+                if (data.logged_in) {
+                    document.getElementById('authModal').classList.add('hidden');
+                    if(userInfo) userInfo.style.display = 'flex';
+                    if(usernameDisplay) usernameDisplay.innerText = data.username;
+                } else {
+                    document.getElementById('authModal').classList.remove('hidden');
+                    if(userInfo) userInfo.style.display = 'none';
+                }
+            } catch(e) {}
+        }
+
+        async function logoutUser() {
+            try {
+                const res = await fetch('/api/logout', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    checkUserStatus();
+                    location.reload();
+                }
+            } catch(e) {
+                showErrorToast("Logout failed.");
+            }
+        }
+
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'IFRAME_ERROR') {
+                const errorMsg = event.data.message;
+                showAutoFixBanner(errorMsg);
+            }
+        });
+
+        function showAutoFixBanner(errorMsg) {
+            let banner = document.getElementById('auto-fix-banner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'auto-fix-banner';
+                banner.className = 'fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 animate-bounce';
+                document.body.appendChild(banner);
+            }
+            
+            banner.innerHTML = `
+                <span class="text-sm">⚠️ Runtime Error Detected!</span>
+                <button onclick="fixCodeWithAI('${escape(errorMsg)}')" class="bg-white text-red-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-gray-100">
+                    Auto-Fix with AI ✨
+                </button>
+            `;
+        }
+
+        async function fixCodeWithAI(errorMsg) {
+            const currentCodeVal = document.getElementById('codeView').value;
+            const customApiKey = document.getElementById('customApiKey').value;
+            const banner = document.getElementById('auto-fix-banner');
+            banner.innerHTML = `<span>🔄 Fixing code with Gemini...</span>`;
+
+            try {
+                const response = await fetch('/auto-fix', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        code: currentCodeVal, 
+                        error: unescape(errorMsg),
+                        api_key: customApiKey
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'success' && data.fixed_code) {
+                    currentCode = data.fixed_code;
+                    updatePreview(currentCode);
+                    banner.remove();
+                    alert("Code Auto-Fixed Successfully!");
+                } else {
+                    if(data.message && (data.message.includes('Quota exceeded') || data.message.includes('429'))) {
+                        if(confirm("API Quota limit reached! Do you want to get a new free API Key from Google AI Studio?")) {
+                            window.open("https://aistudio.google.com/app/apikey", "_blank");
+                        }
+                    } else {
+                        alert("Auto-Fix Error: " + (data.message || 'Failed to fix code.'));
+                    }
+                    banner.remove();
+                }
+            } catch (err) {
+                alert("Fixing failed. Please try again.");
+                banner.remove();
+            }
+        }
+
+        function enhancePrompt() {
+            const promptBox = document.getElementById('promptInput');
+            let text = promptBox.value.trim();
+            if(!text) return alert('Please enter a short prompt first!');
+
+            const enhancedText = `Create a fully responsive, modern web application for: "${text}".\n- UI Features: Dark theme, glassmorphism UI, soft gradient buttons, Tailwind CSS.\n- Functional Features: Clean animations, interactive user controls, responsive viewports, and clean UI components.\n- Make it fully functional with dynamic JavaScript logic.`;
+
+            promptBox.value = enhancedText;
+        }
+
+        function setViewport(mode) {
+            const frame = document.getElementById('previewFrame');
+            const bDesktop = document.getElementById('btnDesktop');
+            const bTablet = document.getElementById('btnTablet');
+            const bMobile = document.getElementById('btnMobile');
+
+            frame.className = "rounded-xl bg-white border-0 shadow-2xl ";
+            [bDesktop, bTablet, bMobile].forEach(btn => {
+                btn.className = "px-3 py-1.5 rounded-lg hover:text-slate-200 flex items-center gap-1.5 text-slate-400";
+            });
+
+            if(mode === 'desktop') {
+                frame.classList.add('view-desktop');
+                bDesktop.className = "px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-300 font-semibold flex items-center gap-1.5";
+            } else if(mode === 'tablet') {
+                frame.classList.add('view-tablet');
+                bTablet.className = "px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-300 font-semibold flex items-center gap-1.5";
+            } else if(mode === 'mobile') {
+                frame.classList.add('view-mobile');
+                bMobile.className = "px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-300 font-semibold flex items-center gap-1.5";
+            }
+        }
+
+        async function generateApp(type) {
+            const rawPrompt = document.getElementById('promptInput').value;
+            const customApiKey = document.getElementById('customApiKey').value;
+            const status = document.getElementById('status');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            
+            if(!rawPrompt.trim()) return alert('Please enter a prompt!');
+
+            if(type === 'update' && !currentCode) {
+                return alert('No existing app found to update!');
+            }
+
+            loadingOverlay.classList.remove('hidden');
+            status.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span> ${type === 'new' ? 'Creating new app...' : 'Updating app...'}`;
+
+            const previous_code = (type === 'update') ? currentCode : '';
+            let promptToSend = (type === 'update') 
+                ? `STRICT INSTRUCTION: DO NOT CHANGE THE TOPIC OR OVERWRITE THE APP. Modify the EXISTING APP only according to this request: ${rawPrompt}`
+                : rawPrompt;
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ 
+                        prompt: promptToSend, 
+                        previous_code: previous_code,
+                        api_key: customApiKey
+                    })
+                });
+
+                const result = await response.json();
+                
+                if(result.status === 'success') {
+                    currentCode = result.code;
+                    updatePreview(currentCode);
+                    enableUpdateBtn();
+                    document.getElementById('exportOptions').style.display = 'grid';
+                    document.getElementById('promptInput').value = "";
+                    status.innerHTML = `<span class="w-2 h-2 rounded-full bg-pink-400"></span> ${type === 'new' ? 'App Ready ✨' : 'App Updated ✨'}`;
+                    loadHistory();
+                } else {
+                    status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Server Error`;
+                    if(result.message && (result.message.includes('Quota exceeded') || result.message.includes('429'))) {
+                        if(confirm("API Key Limit reached! Do you want to open Google AI Studio to get a new Key?")) {
+                            window.open("https://aistudio.google.com/app/apikey", "_blank");
+                        }
+                    } else {
+                        alert("Error: " + (result.message || "Failed to generate app"));
+                    }
+                }
+            } catch (err) {
+                status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Connection Error`;
+                alert("Connection failed. Please check your network.");
+            } finally {
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        function enableUpdateBtn() {
+            const uBtn = document.getElementById('updateBtn');
+            uBtn.disabled = false;
+            uBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+
+        function updatePreview(code) {
+            const errorInterceptor = `<script>
+                window.onerror = function(message, source, lineno, colno, error) {
+                    window.parent.postMessage({
+                        type: 'IFRAME_ERROR',
+                        message: message + ' at line ' + lineno
+                    }, '*');
+                };
+            <\/script>`;
+            
+            const baseTargetScript = `<base target="_blank">`;
+
+            let injectedCode = code.includes('<head>') 
+                ? code.replace('<head>', '<head>' + errorInterceptor + baseTargetScript)
+                : errorInterceptor + baseTargetScript + code;
+
+            document.getElementById('previewFrame').srcdoc = injectedCode;
+            document.getElementById('codeView').value = code;
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch('/history');
+                const data = await res.json();
+                historyData = data.history;
+                const historyList = document.getElementById('historyList');
+                historyList.innerHTML = '';
+
+                data.history.forEach((item, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'p-2 rounded-xl glass-card border border-pink-500/10 text-xs hover:border-pink-400/50 transition flex justify-between items-center group';
+                    div.innerHTML = `
+                        <span onclick="restoreApp(${index})" class="truncate max-w-[150px] cursor-pointer hover:text-pink-300">
+                            ${item[1]}
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <i onclick="restoreApp(${index})" class="fa-solid fa-arrow-rotate-left text-pink-400 text-[10px] cursor-pointer" title="Restore"></i>
+                            <i onclick="deleteSingleApp(event, ${item[0]})" class="fa-solid fa-trash text-red-400 text-[10px] cursor-pointer hover:text-red-300" title="Delete"></i>
+                        </div>
+                    `;
+                    historyList.appendChild(div);
+                });
+            } catch(e) {}
+        }
+
+        async function deleteSingleApp(event, appId) {
+            event.stopPropagation();
+            if(!confirm("Delete this app?")) return;
+
+            try {
+                const res = await fetch(`/delete-app/${appId}`, { method: 'DELETE' });
+                const data = await res.json();
+                if(data.status === 'success') loadHistory();
+            } catch(err) {
+                alert("Failed to delete.");
+            }
+        }
+
+        async function clearAllHistory() {
+            if(!confirm("Clear all saved apps?")) return;
+            for(let item of historyData) {
+                await fetch(`/delete-app/${item[0]}`, { method: 'DELETE' });
+            }
+            setTimeout(loadHistory, 500);
+        }
+
+        function restoreApp(index) {
+            currentCode = historyData[index][2];
+            updatePreview(currentCode);
+            enableUpdateBtn();
+            document.getElementById('exportOptions').style.display = 'grid';
+            document.getElementById('status').innerHTML = `<span class="w-2 h-2 rounded-full bg-indigo-400"></span> Restored ✨`;
+        }
+
+        function switchTab(tab) {
+            const vControls = document.getElementById('viewControls');
+            if(tab === 'preview') {
+                document.getElementById('previewFrame').classList.remove('hidden');
+                document.getElementById('codeView').classList.add('hidden');
+                vControls.classList.remove('hidden');
+            } else {
+                document.getElementById('previewFrame').classList.add('hidden');
+                document.getElementById('codeView').classList.remove('hidden');
+                vControls.classList.add('hidden');
+            }
+        }
+
+        function downloadCode() {
+            if(!currentCode) return;
+            const blob = new Blob([currentCode], { type: 'text/html' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'generated_app.html';
+            a.click();
+        }
+
+        function downloadZip() {
+            if(!currentCode) return;
+            const zip = new JSZip();
+            zip.file("index.html", currentCode);
+            zip.file("README.txt", "Generated using PromptForge Studio.");
+
+            zip.generateAsync({type:"blob"}).then(function(content) {
+                saveAs(content, "PromptForge_Project.zip");
+            });
+        }
+
+        function saveAndSearch() {
+            let query = document.getElementById('searchInput').value.trim();
+            if (!query) return;
+
+            let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+            history.push(query);
+            localStorage.setItem('searchHistory', JSON.stringify(history));
+
+            displaySearchHistory();
+            window.open("https://www.google.com/search?q=" + encodeURIComponent(query), '_blank');
+        }
+
+        function displaySearchHistory() {
+            let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+            let listContainer = document.getElementById('userSearchHistoryList');
+            if (!listContainer) return;
+            listContainer.innerHTML = '';
+
+            history.forEach(item => {
+                let li = document.createElement('li');
+                li.className = "hover:text-pink-300 transition cursor-pointer";
+                li.textContent = "• " + item;
+                listContainer.appendChild(li);
+            });
+        }
+
+        function clearSearchHistory() {
+            localStorage.removeItem('searchHistory');
+            displaySearchHistory();
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkUserStatus();
+            loadHistory();
+            displaySearchHistory();
+        });
+    </script>
+</body>
+</html>

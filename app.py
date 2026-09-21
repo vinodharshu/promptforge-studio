@@ -8,7 +8,7 @@ from google import genai
 app = Flask(__name__)
 app.secret_key = '552de9df2adc0c199afaf34f7c994eb3152c9df9b2d32638bbbb1642a335fef9'
 
-# DEFAULT API KEY (Environment variable or fallback)
+# DEFAULT API KEY (Environment variable only - SAFE)
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- DATABASE INITIALIZATION & MIGRATION ---
@@ -98,7 +98,7 @@ def user_status():
         return jsonify({'logged_in': True, 'username': session['username']})
     return jsonify({'logged_in': False})
 
-# --- GENERATE APP ROUTE ---
+# --- GENERATE APP ROUTE WITH SMART FALLBACK ---
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -136,10 +136,18 @@ def generate():
         if previous_code:
             full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
 
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=full_prompt
-        )
+        # SMART FALLBACK: If 3.6 Flash experiences high demand, automatically switch to 1.5 Flash
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.6-flash',
+                contents=full_prompt
+            )
+        except Exception as api_err:
+            print(f"Gemini 3.6 high demand or error: {str(api_err)}. Switching to 1.5-flash...")
+            response = client.models.generate_content(
+                model='gemini-1.5-flash',
+                contents=full_prompt
+            )
 
         generated_code = response.text.replace('```html', '').replace('```', '').strip()
 
@@ -168,7 +176,7 @@ def enhance_prompt():
     try:
         client = genai.Client(api_key=DEFAULT_GEMINI_API_KEY)
         response = client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-1.5-flash',
             contents=f"Expand and detail this web app UI request for high quality generation: {raw_prompt}"
         )
         return jsonify({'status': 'success', 'enhanced_prompt': response.text.strip()})
@@ -190,7 +198,7 @@ def auto_fix():
         client = genai.Client(api_key=active_api_key)
         prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
         response = client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         fixed_code = response.text.replace('```html', '').replace('```', '').strip()

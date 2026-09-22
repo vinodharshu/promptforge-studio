@@ -136,16 +136,16 @@ def generate():
         if previous_code:
             full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
 
-        # SMART FALLBACK: If 3.6 Flash experiences high demand, automatically switch to 1.5 Flash
+        # Stable modern models update (Using gemini-2.5-flash as default)
         try:
             response = client.models.generate_content(
-                model='gemini-3.6-flash',
+                model='gemini-2.5-flash',
                 contents=full_prompt
             )
         except Exception as api_err:
-            print(f"Gemini 3.6 high demand or error: {str(api_err)}. Switching to 1.5-flash...")
+            print(f"Gemini 2.5 flash error: {str(api_err)}. Switching to 2.0-flash...")
             response = client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-2.0-flash',
                 contents=full_prompt
             )
 
@@ -176,7 +176,7 @@ def enhance_prompt():
     try:
         client = genai.Client(api_key=DEFAULT_GEMINI_API_KEY)
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.5-flash',
             contents=f"Expand and detail this web app UI request for high quality generation: {raw_prompt}"
         )
         return jsonify({'status': 'success', 'enhanced_prompt': response.text.strip()})
@@ -198,7 +198,7 @@ def auto_fix():
         client = genai.Client(api_key=active_api_key)
         prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.5-flash',
             contents=prompt
         )
         fixed_code = response.text.replace('```html', '').replace('```', '').strip()

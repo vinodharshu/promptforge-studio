@@ -1,78 +1,84 @@
 import os
-import time
 import sqlite3
 from flask import Flask, send_from_directory, request, jsonify, session
 from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
 import google.generativeai as genai
 
 app = Flask(__name__, static_folder='.', template_folder='.')
 
-# 1. Secret Key setup
+# 1. Secret Key setup for sessions
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
-# 2. Cross-Domain Session Cookie Handling for Render
+# 2. Session Cookie Handling (Render & Cross-Domain Compatible)
+# Set SameSite to 'None' for cross-domain cookie handling over HTTPS
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 
-# 3. CORS Configuration (Allows Frontend to access Backend with Cookies)
-CORS(app, supports_credentials=True, origins=[
+# 3. CORS Configuration
+ALLOWED_ORIGINS = [
     "http://127.0.0.1:5500", 
     "http://localhost:5500",
+    "http://127.0.0.1:5000",
     "http://localhost:5000",
     "https://promptforge-studio.onrender.com"
-])
+]
+
+CORS(app, supports_credentials=True, origins=ALLOWED_ORIGINS)
 
 # DEFAULT API KEY
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- DATABASE INITIALIZATION ---
 def init_db():
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
+    with sqlite3.connect('database.db') as conn:
+        cursor = conn.cursor()
 
-    # 1. Users Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            api_key TEXT DEFAULT ''
-        )
-    ''')
-    
-    # 2. Apps Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS apps (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            prompt TEXT NOT NULL,
-            code TEXT NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
+        # 1. Users Table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                api_key TEXT DEFAULT ''
+            )
+        ''')
+        
+        # 2. Apps Table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS apps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                prompt TEXT NOT NULL,
+                code TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
 
-    # Automatic Migration check
-    cursor.execute("PRAGMA table_info(apps)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if 'user_id' not in columns:
-        cursor.execute("ALTER TABLE apps ADD COLUMN user_id INTEGER")
+        # Automatic Migration check
+        cursor.execute("PRAGMA table_info(apps)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'user_id' not in columns:
+            cursor.execute("ALTER TABLE apps ADD COLUMN user_id INTEGER")
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 init_db()
 
 # Helper function to generate content with fallback models
 def call_gemini_model(prompt_text):
     models_to_try = [
+        'gemini-2.5-flash',
         'gemini-1.5-flash',
         'gemini-1.5-pro',
         'gemini-2.0-flash',
-        'gemini-2.5-flash',
-        'gemini-3.6-flash'
+        'gemini-3.6-flash',
+        'gemini-3.6-flash-lite',
+        'gemini-3.6-pro',
+        'gemini-3.6-pro-lite'
     ]
-    last_exception = None
+    last_exception = Exception("No models responded successfully.")
      
     for model_name in models_to_try:
         try:
@@ -106,12 +112,13 @@ def register():
     if not username or not password:
         return jsonify({'status': 'error', 'message': 'Username and password required!'}), 400
 
+    hashed_password = generate_password_hash(password)
+
     try:
-        conn = sqlite3.connect('database.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect('database.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, hashed_password))
+            conn.commit()
         return jsonify({'status': 'success', 'message': 'User registered successfully!'})
     except sqlite3.IntegrityError:
         return jsonify({'status': 'error', 'message': 'Username already exists!'}), 400
@@ -122,16 +129,16 @@ def login():
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
 
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, username FROM users WHERE username = ? AND password = ?', (username, password))
-    user = cursor.fetchone()
-    conn.close()
+    with sqlite3.connect('database.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, username, password FROM users WHERE username = ?', (username,))
+        user = cursor.fetchone()
 
-    if user:
+    if user and check_password_hash(user[2], password):
         session['user_id'] = user[0]
         session['username'] = user[1]
         return jsonify({'status': 'success', 'username': user[1]})
+        
     return jsonify({'status': 'error', 'message': 'Invalid credentials!'}), 401
 
 @app.route('/api/logout', methods=['POST'])
@@ -191,12 +198,11 @@ def generate():
         elif "```" in generated_code:
             generated_code = generated_code.split("```")[1].split("```")[0].strip()
 
-        conn = sqlite3.connect('database.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO apps (user_id, prompt, code) VALUES (?, ?, ?)', 
-                       (session['user_id'], user_prompt, generated_code))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect('database.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO apps (user_id, prompt, code) VALUES (?, ?, ?)', 
+                           (session['user_id'], user_prompt, generated_code))
+            conn.commit()
 
         return jsonify({'status': 'success', 'code': generated_code})
 
@@ -252,11 +258,11 @@ def history():
     if 'user_id' not in session:
         return jsonify({'history': []})
 
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, prompt, code FROM apps WHERE user_id = ? ORDER BY id DESC', (session['user_id'],))
-    rows = cursor.fetchall()
-    conn.close()
+    with sqlite3.connect('database.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, prompt, code FROM apps WHERE user_id = ? ORDER BY id DESC', (session['user_id'],))
+        rows = cursor.fetchall()
+        
     return jsonify({'history': rows})
 
 @app.route('/history/delete/<int:app_id>', methods=['DELETE'])
@@ -265,11 +271,11 @@ def delete_app(app_id):
     if 'user_id' not in session:
         return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
 
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM apps WHERE id = ? AND user_id = ?', (app_id, session['user_id']))
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('database.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM apps WHERE id = ? AND user_id = ?', (app_id, session['user_id']))
+        conn.commit()
+        
     return jsonify({'status': 'success'})
 
 @app.route('/history/clear', methods=['DELETE'])
@@ -277,11 +283,11 @@ def clear_history():
     if 'user_id' not in session:
         return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
 
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM apps WHERE user_id = ?', (session['user_id'],))
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('database.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM apps WHERE user_id = ?', (session['user_id'],))
+        conn.commit()
+        
     return jsonify({'status': 'success'})
 
 # --- MAIN SERVER RUNNER ---

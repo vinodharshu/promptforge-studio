@@ -199,7 +199,6 @@
     </div>
 
     <script>
-        // Backend URL (Same domain setup)
         const API_BASE_URL = "https://promptforge-backend.onrender.com";
 
         let currentCode = "";
@@ -254,14 +253,14 @@
                 
                 if (res.ok && data.status === 'success') {
                     if (isSignUp) {
-                        alert("Account created! Now login.");
+                        alert("Account created successfully! Please log in.");
                         toggleAuthMode();
                     } else {
                         document.getElementById('authModal').classList.add('hidden');
                         checkUserStatus();
                     }
                 } else {
-                    showErrorToast(data.message || 'Login failed. Invalid username or password!');
+                    showErrorToast(data.message || 'Authentication failed!');
                 }
             } catch(err) {
                 console.error("Auth Error:", err);
@@ -282,7 +281,7 @@
                     document.getElementById('authModal').classList.add('hidden');
                     if(userInfo) userInfo.style.display = 'flex';
                     if(usernameDisplay) usernameDisplay.innerText = data.username;
-                    loadHistory(); // User logged in, load history
+                    loadHistory();
                 } else {
                     document.getElementById('authModal').classList.remove('hidden');
                     if(userInfo) userInfo.style.display = 'none';
@@ -480,12 +479,12 @@
 
         function updatePreview(code) {
             const errorInterceptor = `<script>
-                window.onerror = function(message, source, lineno, colno, error) {
+                window.addEventListener('error', function(e) {
                     window.parent.postMessage({
                         type: 'IFRAME_ERROR',
-                        message: message + ' at line ' + lineno
+                        message: e.message + ' at line ' + e.lineno
                     }, '*');
-                };
+                });
             <\/script>`;
             
             const baseTargetScript = `<base target="_blank">`;

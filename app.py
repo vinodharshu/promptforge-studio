@@ -50,7 +50,7 @@ init_db()
 # Helper function to generate content with fallback models
 def call_gemini_model(prompt_text):
     # Try gemini-1.5-flash first, then try gemini-2.0-flash / gemini-2.5-flash as backup
-    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash']
+    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash','gemini-3.6-flash']
     last_exception = None
     
     for model_name in models_to_try:
@@ -246,3 +246,25 @@ def index():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+    # Updated Model Function
+def call_gemini_model(prompt_text):
+    # Modern stable model identifiers
+    models_to_try = [
+        'gemini-1.5-flash-latest', 
+        'gemini-1.5-pro-latest',
+        'gemini-1.5-flash',
+        'gemini-2.0-flash-exp'
+        'gemini-3.6-flash'
+    ]
+    last_exception = None
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt_text)
+            return response.text
+        except Exception as e:
+            last_exception = e
+            print(f"Model {model_name} failed: {e}. Trying next...")
+            
+    raise last_exception

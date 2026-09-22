@@ -6,13 +6,16 @@ from flask_cors import CORS
 import google.generativeai as genai
 
 app = Flask(__name__, static_folder='.', template_folder='.')
+
+# 1. Secret Key setup
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
-# 1. Session Configuration for Localhost & Production
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Cross-origin cookie handling
-app.config['SESSION_COOKIE_SECURE'] = True      # HTTPS requirement
+# 2. Cross-Domain Session Cookie Handling for Render
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
-# CORS configuration
+# 3. CORS Configuration (Allows Frontend to access Backend with Cookies)
 CORS(app, supports_credentials=True, origins=[
     "http://127.0.0.1:5500", 
     "http://localhost:5500",
@@ -66,7 +69,8 @@ def call_gemini_model(prompt_text):
         'gemini-1.5-flash',
         'gemini-1.5-pro',
         'gemini-2.0-flash',
-        'gemini-2.5-flash'
+        'gemini-2.5-flash',
+        'gemini-3.6-flash'
     ]
     last_exception = None
      
@@ -84,14 +88,12 @@ def call_gemini_model(prompt_text):
 # --- ROOT ROUTE (INDEX PAGE) ---
 @app.route('/')
 def index():
-    # 'templates' ஃபோல்டரில் index.html இருந்தால் அதை அனுப்பும்
     if os.path.exists(os.path.join(app.root_path, 'templates', 'index.html')):
         return send_from_directory('templates', 'index.html')
-    # Root folder-லேயே index.html இருந்தால் அதை நேரடியாக அனுப்பும்
     elif os.path.exists(os.path.join(app.root_path, 'index.html')):
         return send_from_directory('.', 'index.html')
     else:
-        return "Error: index.html file not found in project directory!", 404
+        return "PromptForge Backend Service Running Successfully!", 200
 
 # --- USER AUTHENTICATION ROUTES ---
 

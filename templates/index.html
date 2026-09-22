@@ -25,7 +25,7 @@
         .view-mobile { width: 375px; height: 100%; transition: width 0.3s ease; }
     </style>
 </head>
-<body class="text-slate-200 h-screen flex flex-col overflow-hidden relative" onload="checkUserStatus(); loadHistory();">
+<body class="text-slate-200 h-screen flex flex-col overflow-hidden relative" onload="checkUserStatus();">
 
     <!-- Toast Notification Box -->
     <div id="toast-danger" class="fixed top-5 right-5 hidden flex items-center w-full max-w-xs p-4 text-red-200 bg-red-900/90 backdrop-blur-md rounded-xl shadow-2xl border border-red-500/30 transition-all duration-300 z-50">
@@ -199,6 +199,7 @@
     </div>
 
     <script>
+        // Backend URL (Same domain setup)
         const API_BASE_URL = "https://promptforge-backend.onrender.com";
 
         let currentCode = "";
@@ -281,6 +282,7 @@
                     document.getElementById('authModal').classList.add('hidden');
                     if(userInfo) userInfo.style.display = 'flex';
                     if(usernameDisplay) usernameDisplay.innerText = data.username;
+                    loadHistory(); // User logged in, load history
                 } else {
                     document.getElementById('authModal').classList.remove('hidden');
                     if(userInfo) userInfo.style.display = 'none';
@@ -518,7 +520,9 @@
                     `;
                     historyList.appendChild(div);
                 });
-            } catch(e) {}
+            } catch(e) {
+                console.error("Failed to load history:", e);
+            }
         }
 
         function restoreApp(index) {

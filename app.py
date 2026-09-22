@@ -253,7 +253,7 @@ def call_gemini_model(prompt_text):
         'gemini-1.5-flash-latest', 
         'gemini-1.5-pro-latest',
         'gemini-1.5-flash',
-        'gemini-2.0-flash-exp'
+        'gemini-2.0-flash-exp',
         'gemini-3.6-flash'
     ]
     last_exception = None

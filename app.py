@@ -1,14 +1,13 @@
 import os
 import time
 import sqlite3
-from functools import wraps
-from flask import Flask, render_template, request, jsonify, Response, session
-from google import genai
+from flask import Flask, render_template, request, jsonify, session
+import google.generativeai as genai
 
 app = Flask(__name__)
-app.secret_key = '552de9df2adc0c199afaf34f7c994eb3152c9df9b2d32638bbbb1642a335fef9'
+app.secret_key = os.getenv("SECRET_KEY", "552de9df2adc0c199afaf34f7c994eb3152c9df9b2d32638bbbb1642a335fef9")
 
-# DEFAULT API KEY (Environment variable only - SAFE)
+# DEFAULT API KEY (Environment Variable)
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- DATABASE INITIALIZATION & MIGRATION ---
@@ -98,7 +97,7 @@ def user_status():
         return jsonify({'logged_in': True, 'username': session['username']})
     return jsonify({'logged_in': False})
 
-# --- GENERATE APP ROUTE WITH SMART FALLBACK ---
+# --- GENERATE APP ROUTE ---
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -115,41 +114,42 @@ def generate():
 
     active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
 
-    try:
-        time.sleep(1)
-        client = genai.Client(api_key=active_api_key)
+    if not active_api_key:
+        return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
-        system_instruction = """
-        You are a World-Class UI/UX & Web Developer.
-        CRITICAL UPDATE RULE:
-        - If 'PREVIOUS CODE' is provided, modify the EXISTING code.
-        - DO NOT create a completely new topic or app.
-        - ONLY apply requested changes on top of existing code.
-        
-        OUTPUT RULES:
-        1. Return ONLY single-file valid HTML code with embedded CSS/JS.
-        2. Do NOT wrap code in markdown. Return RAW HTML ONLY.
-        3. Use Tailwind CSS via CDN inside <head>.
-        """
+    try:
+        genai.configure(api_key=active_api_key)
+
+        system_instruction = (
+            "You are a World-Class UI/UX & Web Developer.\n"
+            "CRITICAL UPDATE RULE:\n"
+            "- If 'PREVIOUS CODE' is provided, modify the EXISTING code.\n"
+            "- DO NOT create a completely new topic or app.\n"
+            "- ONLY apply requested changes on top of existing code.\n\n"
+            "OUTPUT RULES:\n"
+            "1. Return ONLY single-file valid HTML code with embedded CSS/JS.\n"
+            "2. Do NOT wrap code in markdown. Return RAW HTML ONLY.\n"
+            "3. Use Tailwind CSS via CDN inside <head>.\n"
+        )
 
         full_prompt = f"{system_instruction}\n\nUSER PROMPT: {user_prompt}\n"
         if previous_code:
             full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
 
-        # Stable modern models update (Using gemini-2.5-flash as default)
+        # Working fallback model structure
         try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=full_prompt
-            )
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(full_prompt)
         except Exception as api_err:
-            print(f"Gemini 2.5 flash error: {str(api_err)}. Switching to 2.0-flash...")
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=full_prompt
-            )
+            print(f"Switching to backup model due to: {api_err}")
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content(full_prompt)
 
-        generated_code = response.text.replace('```html', '').replace('```', '').strip()
+        generated_code = response.text
+        if "```html" in generated_code:
+            generated_code = generated_code.split("```html")[1].split("```")[0].strip()
+        elif "```" in generated_code:
+            generated_code = generated_code.split("```")[1].split("```")[0].strip()
 
         conn = sqlite3.connect('database.db')
         cursor = conn.cursor()
@@ -174,11 +174,9 @@ def enhance_prompt():
         return jsonify({'status': 'error', 'message': 'Prompt required'}), 400
 
     try:
-        client = genai.Client(api_key=DEFAULT_GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=f"Expand and detail this web app UI request for high quality generation: {raw_prompt}"
-        )
+        genai.configure(api_key=DEFAULT_GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}")
         return jsonify({'status': 'success', 'enhanced_prompt': response.text.strip()})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -195,13 +193,17 @@ def auto_fix():
     active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
 
     try:
-        client = genai.Client(api_key=active_api_key)
+        genai.configure(api_key=active_api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        fixed_code = response.text.replace('```html', '').replace('```', '').strip()
+        response = model.generate_content(prompt)
+        
+        fixed_code = response.text
+        if "```html" in fixed_code:
+            fixed_code = fixed_code.split("```html")[1].split("```")[0].strip()
+        elif "```" in fixed_code:
+            fixed_code = fixed_code.split("```")[1].split("```")[0].strip()
+
         return jsonify({'status': 'success', 'fixed_code': fixed_code})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -237,4 +239,4 @@ def index():
     return render_template('index.html')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000)

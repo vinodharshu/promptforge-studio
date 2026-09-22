@@ -8,16 +8,18 @@ import google.generativeai as genai
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
-# 1. Session Configuration for Localhost
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Cross-origin cookie சேமிக்க
-app.config['SESSION_COOKIE_SECURE'] = True      # HTTPS-இல் மட்டும் இயங்க
+# 1. Session Configuration for Localhost & Production
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Cross-origin cookie handling
+app.config['SESSION_COOKIE_SECURE'] = True      # HTTPS requirement
 
-# CORS அமைப்பில் உங்கள் Frontend URL-ஐ மட்டும் சேர்க்க வேண்டும்:
+# CORS configuration
 CORS(app, supports_credentials=True, origins=[
     "http://127.0.0.1:5500", 
     "http://localhost:5500",
-    "https://promptforge-studio.onrender.com" # உங்கள் Frontend Live URL
+    "http://localhost:5000",
+    "https://promptforge-studio.onrender.com"
 ])
+
 # DEFAULT API KEY
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -25,7 +27,7 @@ DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 def init_db():
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    
+
     # 1. Users Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -47,7 +49,7 @@ def init_db():
         )
     ''')
 
-    # Automatic Migration
+    # Automatic Migration check
     cursor.execute("PRAGMA table_info(apps)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'user_id' not in columns:
@@ -64,6 +66,7 @@ def call_gemini_model(prompt_text):
         'gemini-1.5-flash',
         'gemini-1.5-pro',
         'gemini-2.0-flash',
+        'gemini-2.5-flash',
         'gemini-3.6-flash'
     ]
     last_exception = None
@@ -243,7 +246,6 @@ def history():
     conn.close()
     return jsonify({'history': rows})
 
-# Frontend-உடன் பொருந்துமாறு Route பெயர்கள் மாற்றப்பட்டுள்ளன
 @app.route('/history/delete/<int:app_id>', methods=['DELETE'])
 @app.route('/delete-app/<int:app_id>', methods=['DELETE'])
 def delete_app(app_id):
@@ -271,9 +273,10 @@ def clear_history():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return jsonify({"status": "Backend running with Local SQL Database!"})
 
 # --- MAIN SERVER RUNNER ---
 if __name__ == '__main__':
-    print("🚀 Server running on http://127.0.0.1:5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"🚀 Server running on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=True)

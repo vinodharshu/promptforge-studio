@@ -94,23 +94,6 @@
                     </p>
                 </div>
 
-                <!-- Search & History Feature -->
-                <div class="p-3 rounded-2xl glass-card border border-pink-500/10 space-y-2">
-                    <label class="text-xs font-bold uppercase tracking-wider text-pink-300/80 flex items-center gap-1.5">
-                        <i class="fa-solid fa-magnifying-glass"></i> Custom Search
-                    </label>
-                    <div class="flex gap-2">
-                        <input type="text" id="searchInput" placeholder="Search query..." 
-                            class="w-full bg-slate-950/70 border border-pink-500/20 rounded-xl px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-pink-400">
-                        <button onclick="saveAndSearch()" class="gradient-btn px-3 py-1 rounded-xl text-xs font-semibold text-white">Search</button>
-                    </div>
-                    <div class="flex justify-between items-center pt-2">
-                        <span class="text-[11px] font-semibold text-purple-300">Search History</span>
-                        <button onclick="clearSearchHistory()" class="text-[10px] text-red-400 hover:underline">Clear History</button>
-                    </div>
-                    <ul id="userSearchHistoryList" class="max-h-24 overflow-y-auto text-xs space-y-1 text-slate-400"></ul>
-                </div>
-
                 <!-- Input Box -->
                 <div>
                     <div class="flex justify-between items-center mb-2">
@@ -216,6 +199,9 @@
     </div>
 
     <script>
+        // Local Backend URL
+        const API_BASE_URL = "http://127.0.0.1:5000"; 
+
         let currentCode = "";
         let historyData = [];
         let isSignUp = false;
@@ -251,12 +237,16 @@
                 return;
             }
 
-            const endpoint = isSignUp ? '/api/register' : '/api/login';
+            const endpoint = isSignUp ? `${API_BASE_URL}/api/register` : `${API_BASE_URL}/api/login`;
             
             try {
                 const res = await fetch(endpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    credentials: 'include',
                     body: JSON.stringify({ username, password })
                 });
 
@@ -268,19 +258,22 @@
                         toggleAuthMode();
                     } else {
                         document.getElementById('authModal').classList.add('hidden');
-                        location.reload();
+                        checkUserStatus();
                     }
                 } else {
                     showErrorToast(data.message || 'Login failed. Invalid username or password!');
                 }
             } catch(err) {
-                showErrorToast("Network error. Please try again!");
+                console.error("Auth Error:", err);
+                showErrorToast("Network error. Check if Python backend is running on 127.0.0.1:5000");
             }
         }
 
         async function checkUserStatus() {
             try {
-                const res = await fetch('/api/user-status');
+                const res = await fetch(`${API_BASE_URL}/api/user-status`, {
+                    credentials: 'include'
+                });
                 const data = await res.json();
                 const userInfo = document.getElementById('user-info');
                 const usernameDisplay = document.getElementById('username-display');
@@ -293,12 +286,17 @@
                     document.getElementById('authModal').classList.remove('hidden');
                     if(userInfo) userInfo.style.display = 'none';
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error("Status check failed:", e);
+            }
         }
 
         async function logoutUser() {
             try {
-                const res = await fetch('/api/logout', { method: 'POST' });
+                const res = await fetch(`${API_BASE_URL}/api/logout`, { 
+                    method: 'POST',
+                    credentials: 'include' 
+                });
                 const data = await res.json();
                 if (data.status === 'success') {
                     checkUserStatus();
@@ -340,9 +338,10 @@
             banner.innerHTML = `<span>🔄 Fixing code with Gemini...</span>`;
 
             try {
-                const response = await fetch('/auto-fix', {
+                const response = await fetch(`${API_BASE_URL}/auto-fix`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({ 
                         code: currentCodeVal, 
                         error: unescape(errorMsg),
@@ -357,13 +356,7 @@
                     banner.remove();
                     alert("Code Auto-Fixed Successfully!");
                 } else {
-                    if(data.message && (data.message.includes('Quota exceeded') || data.message.includes('429'))) {
-                        if(confirm("API Quota limit reached! Do you want to get a new free API Key from Google AI Studio?")) {
-                            window.open("https://aistudio.google.com/app/apikey", "_blank");
-                        }
-                    } else {
-                        alert("Auto-Fix Error: " + (data.message || 'Failed to fix code.'));
-                    }
+                    alert("Auto-Fix Error: " + (data.message || 'Failed to fix code.'));
                     banner.remove();
                 }
             } catch (err) {
@@ -445,9 +438,10 @@
                 : rawPrompt;
 
             try {
-                const response = await fetch('/generate', {
+                const response = await fetch(`${API_BASE_URL}/generate`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
                     body: JSON.stringify({ 
                         prompt: promptToSend, 
                         previous_code: previous_code,
@@ -467,17 +461,11 @@
                     loadHistory();
                 } else {
                     status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Server Error`;
-                    if(result.message && (result.message.includes('Quota exceeded') || result.message.includes('429'))) {
-                        if(confirm("API Key Limit reached! Do you want to open Google AI Studio to get a new Key?")) {
-                            window.open("https://aistudio.google.com/app/apikey", "_blank");
-                        }
-                    } else {
-                        alert("Error: " + (result.message || "Failed to generate app"));
-                    }
+                    alert("Error: " + (result.message || "Failed to generate app"));
                 }
             } catch (err) {
                 status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Connection Error`;
-                alert("Connection failed. Please check your network.");
+                alert("Connection failed. Please check if Python Flask is running.");
             } finally {
                 loadingOverlay.classList.add('hidden');
             }
@@ -511,7 +499,7 @@
 
         async function loadHistory() {
             try {
-                const res = await fetch('/history');
+                const res = await fetch(`${API_BASE_URL}/history`, { credentials: 'include' });
                 const data = await res.json();
                 historyData = data.history || [];
                 const historyList = document.getElementById('historyList');
@@ -547,7 +535,10 @@
             event.stopPropagation();
             if (!confirm("Are you sure you want to delete this creation?")) return;
             try {
-                await fetch(`/history/delete/${appId}`, { method: 'DELETE' });
+                await fetch(`${API_BASE_URL}/history/delete/${appId}`, { 
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
                 loadHistory();
             } catch(e) {
                 alert("Failed to delete item.");
@@ -557,7 +548,10 @@
         async function clearAllHistory() {
             if (!confirm("Clear all saved creations?")) return;
             try {
-                await fetch('/history/clear', { method: 'DELETE' });
+                await fetch(`${API_BASE_URL}/history/clear`, { 
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
                 loadHistory();
             } catch(e) {
                 alert("Failed to clear history.");
@@ -578,31 +572,6 @@
                 saveAs(content, "project.zip");
             });
         }
-
-        function saveAndSearch() {
-            const query = document.getElementById('searchInput').value.trim();
-            if (!query) return;
-
-            let searchHistory = JSON.parse(localStorage.getItem('searchHistory') || '[]');
-            searchHistory.unshift(query);
-            localStorage.setItem('searchHistory', JSON.stringify(searchHistory.slice(0, 10)));
-            
-            document.getElementById('searchInput').value = '';
-            renderSearchHistory();
-        }
-
-        function renderSearchHistory() {
-            const list = document.getElementById('userSearchHistoryList');
-            const searchHistory = JSON.parse(localStorage.getItem('searchHistory') || '[]');
-            list.innerHTML = searchHistory.map(q => `<li class="truncate hover:text-slate-200 cursor-pointer" onclick="document.getElementById('promptInput').value='${q}'">• ${q}</li>`).join('');
-        }
-
-        function clearSearchHistory() {
-            localStorage.removeItem('searchHistory');
-            renderSearchHistory();
-        }
-
-        renderSearchHistory();
     </script>
 </body>
 </html>

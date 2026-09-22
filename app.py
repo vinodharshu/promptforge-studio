@@ -2,15 +2,30 @@ import os
 import time
 import sqlite3
 from flask import Flask, render_template, request, jsonify, session
+from flask_cors import CORS
 import google.generativeai as genai
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "552de9df2adc0c199afaf34f7c994eb3152c9df9b2d32638bbbb1642a335fef9")
+app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-promptforge")
 
-# DEFAULT API KEY (Environment Variable)
+# 1. Session Configuration for Localhost
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = False
+
+# 2. CORS அனுமதி (Wildcard '*' நீக்கப்பட்டு, குறிப்பிட்ட Origins சேர்க்கப்பட்டுள்ளது)
+CORS(app, supports_credentials=True, origins=[
+    "http://127.0.0.1:5500", 
+    "http://localhost:5500", 
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000"
+])
+
+# DEFAULT API KEY
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- DATABASE INITIALIZATION & MIGRATION ---
+# --- DATABASE INITIALIZATION ---
 def init_db():
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
@@ -49,8 +64,12 @@ init_db()
 
 # Helper function to generate content with fallback models
 def call_gemini_model(prompt_text):
-    # Try gemini-1.5-flash first, then try gemini-2.0-flash / gemini-2.5-flash as backup
-    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash','gemini-3.6-flash']
+    models_to_try = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0-flash',
+        'gemini-3.6-flash'
+    ]
     last_exception = None
     
     for model_name in models_to_try:
@@ -68,7 +87,7 @@ def call_gemini_model(prompt_text):
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.json or {}
+    data = request.get_json() or {}
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
 
@@ -87,7 +106,7 @@ def register():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.json or {}
+    data = request.get_json() or {}
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
 
@@ -121,7 +140,7 @@ def generate():
     if 'user_id' not in session:
         return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
 
-    data = request.json or {}
+    data = request.get_json() or {}
     user_prompt = data.get('prompt', '')
     previous_code = data.get('previous_code', '')
     custom_api_key = data.get('api_key', '').strip()
@@ -176,7 +195,7 @@ def generate():
 
 @app.route('/enhance-prompt', methods=['POST'])
 def enhance_prompt():
-    data = request.json or {}
+    data = request.get_json() or {}
     raw_prompt = data.get('prompt', '')
     
     if not raw_prompt:
@@ -193,7 +212,7 @@ def enhance_prompt():
 
 @app.route('/auto-fix', methods=['POST'])
 def auto_fix():
-    data = request.json or {}
+    data = request.get_json() or {}
     code = data.get('code', '')
     error_msg = data.get('error', '')
     custom_api_key = data.get('api_key', '').strip()
@@ -228,6 +247,8 @@ def history():
     conn.close()
     return jsonify({'history': rows})
 
+# Frontend-உடன் பொருந்துமாறு Route பெயர்கள் மாற்றப்பட்டுள்ளன
+@app.route('/history/delete/<int:app_id>', methods=['DELETE'])
 @app.route('/delete-app/<int:app_id>', methods=['DELETE'])
 def delete_app(app_id):
     if 'user_id' not in session:
@@ -240,31 +261,23 @@ def delete_app(app_id):
     conn.close()
     return jsonify({'status': 'success'})
 
+@app.route('/history/clear', methods=['DELETE'])
+def clear_history():
+    if 'user_id' not in session:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM apps WHERE user_id = ?', (session['user_id'],))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success'})
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# --- MAIN SERVER RUNNER ---
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
-    # Updated Model Function
-def call_gemini_model(prompt_text):
-    # Modern stable model identifiers
-    models_to_try = [
-        'gemini-1.5-flash-latest', 
-        'gemini-1.5-pro-latest',
-        'gemini-1.5-flash',
-        'gemini-2.0-flash-exp',
-        'gemini-3.6-flash'
-    ]
-    last_exception = None
-    
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt_text)
-            return response.text
-        except Exception as e:
-            last_exception = e
-            print(f"Model {model_name} failed: {e}. Trying next...")
-            
-    raise last_exception
+    print("🚀 Server running on http://127.0.0.1:5000")
+    app.run(host='0.0.0.0', port=5000, debug=True)

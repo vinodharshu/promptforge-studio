@@ -6,7 +6,7 @@ from flask_cors import CORS
 import google.generativeai as genai
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-promptforge")
+app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
 # 1. Session Configuration for Localhost
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'

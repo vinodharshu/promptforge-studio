@@ -324,7 +324,7 @@
             
             banner.innerHTML = `
                 <span class="text-sm">⚠️ Runtime Error Detected!</span>
-                <button onclick="fixCodeWithAI('${escape(errorMsg)}')" class="bg-white text-red-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-gray-100">
+                <button onclick="fixCodeWithAI('${encodeURIComponent(errorMsg)}')" class="bg-white text-red-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-gray-100">
                     Auto-Fix with AI ✨
                 </button>
             `;
@@ -343,7 +343,7 @@
                     credentials: 'include',
                     body: JSON.stringify({ 
                         code: currentCodeVal, 
-                        error: unescape(errorMsg),
+                        error: decodeURIComponent(errorMsg),
                         api_key: customApiKey
                     })
                 });

@@ -5,7 +5,8 @@ from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
 import google.generativeai as genai
 
-app = Flask(__name__)
+# template_folder='.' என சேர்க்கப்பட்டுள்ளதால் index.html-ஐ நேரடியாக எடுக்கும்
+app = Flask(__name__, template_folder='.')
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
 # 1. Session Configuration for Localhost & Production
@@ -81,6 +82,12 @@ def call_gemini_model(prompt_text):
             print(f"Model {model_name} failed: {e}. Trying next fallback...")
             
     raise last_exception
+
+# --- ROOT ROUTE (INDEX PAGE) ---
+@app.route('/')
+def index():
+    # Render-ல் லிங்க் திறக்கும் போது நேரடியாக index.html-ஐக் காட்டும்
+    return render_template('index.html')
 
 # --- USER AUTHENTICATION ROUTES ---
 
@@ -270,10 +277,6 @@ def clear_history():
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
-
-@app.route('/')
-def index():
-    return jsonify({"status": "Backend running with Local SQL Database!"})
 
 # --- MAIN SERVER RUNNER ---
 if __name__ == '__main__':

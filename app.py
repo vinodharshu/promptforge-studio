@@ -16,12 +16,9 @@ app.config['SESSION_COOKIE_SECURE'] = False
 CORS(app, supports_credentials=True, origins=[
     "http://127.0.0.1:5500", 
     "http://localhost:5500", 
-    "http://127.0.0.1:8000",
-    "http://localhost:8000",
-    "http://127.0.0.1:5000",
-    "http://localhost:5000"
+    "https://promptforge-studio.onrender.com" # உங்கள் Frontend Render URL
+    "*" # தேவையாணால்
 ])
-
 # DEFAULT API KEY
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -71,7 +68,7 @@ def call_gemini_model(prompt_text):
         'gemini-3.6-flash'
     ]
     last_exception = None
-    
+     
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)

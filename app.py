@@ -1,12 +1,11 @@
 import os
 import time
 import sqlite3
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, send_from_directory, request, jsonify, session
 from flask_cors import CORS
 import google.generativeai as genai
 
-# template_folder='.' என சேர்க்கப்பட்டுள்ளதால் index.html-ஐ நேரடியாக எடுக்கும்
-app = Flask(__name__, template_folder='.')
+app = Flask(__name__, static_folder='.', template_folder='.')
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
 # 1. Session Configuration for Localhost & Production
@@ -67,8 +66,7 @@ def call_gemini_model(prompt_text):
         'gemini-1.5-flash',
         'gemini-1.5-pro',
         'gemini-2.0-flash',
-        'gemini-2.5-flash',
-        'gemini-3.6-flash'
+        'gemini-2.5-flash'
     ]
     last_exception = None
      
@@ -86,8 +84,14 @@ def call_gemini_model(prompt_text):
 # --- ROOT ROUTE (INDEX PAGE) ---
 @app.route('/')
 def index():
-    # Render-ல் லிங்க் திறக்கும் போது நேரடியாக index.html-ஐக் காட்டும்
-    return render_template('index.html')
+    # 'templates' ஃபோல்டரில் index.html இருந்தால் அதை அனுப்பும்
+    if os.path.exists(os.path.join(app.root_path, 'templates', 'index.html')):
+        return send_from_directory('templates', 'index.html')
+    # Root folder-லேயே index.html இருந்தால் அதை நேரடியாக அனுப்பும்
+    elif os.path.exists(os.path.join(app.root_path, 'index.html')):
+        return send_from_directory('.', 'index.html')
+    else:
+        return "Error: index.html file not found in project directory!", 404
 
 # --- USER AUTHENTICATION ROUTES ---
 

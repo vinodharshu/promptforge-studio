@@ -9,15 +9,14 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "86df73fed8e2613cb2377763562160e7aa2807b6bb6d4cdeaa85dfe1b53c0352")
 
 # 1. Session Configuration for Localhost
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Cross-origin cookie சேமிக்க
+app.config['SESSION_COOKIE_SECURE'] = True      # HTTPS-இல் மட்டும் இயங்க
 
-# 2. CORS அனுமதி (Wildcard '*' நீக்கப்பட்டு, குறிப்பிட்ட Origins சேர்க்கப்பட்டுள்ளது)
+# CORS அமைப்பில் உங்கள் Frontend URL-ஐ மட்டும் சேர்க்க வேண்டும்:
 CORS(app, supports_credentials=True, origins=[
     "http://127.0.0.1:5500", 
-    "http://localhost:5500", 
-    "https://promptforge-studio.onrender.com" # உங்கள் Frontend Render URL
-    "*" # தேவையாணால்
+    "http://localhost:5500",
+    "https://promptforge-studio.onrender.com" # உங்கள் Frontend Live URL
 ])
 # DEFAULT API KEY
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

@@ -199,8 +199,7 @@
     </div>
 
     <script>
-        // Local Backend URL
-        const API_BASE_URL = "https://promptforge-backend.onrender.com" 
+        const API_BASE_URL = "https://promptforge-backend.onrender.com";
 
         let currentCode = "";
         let historyData = [];
@@ -265,7 +264,7 @@
                 }
             } catch(err) {
                 console.error("Auth Error:", err);
-                showErrorToast("Network error. Check if Python backend is running on 127.0.0.1:5000");
+                showErrorToast("Network error. Check backend connection.");
             }
         }
 
@@ -465,7 +464,7 @@
                 }
             } catch (err) {
                 status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Connection Error`;
-                alert("Connection failed. Please check if Python Flask is running.");
+                alert("Connection failed. Please check if Python Flask backend is running.");
             } finally {
                 loadingOverlay.classList.add('hidden');
             }

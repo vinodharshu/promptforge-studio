@@ -47,6 +47,23 @@ def init_db():
 
 init_db()
 
+# Helper function to generate content with fallback models
+def call_gemini_model(prompt_text):
+    # Try gemini-1.5-flash first, then try gemini-2.0-flash / gemini-2.5-flash as backup
+    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash']
+    last_exception = None
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt_text)
+            return response.text
+        except Exception as e:
+            last_exception = e
+            print(f"Model {model_name} failed: {e}. Trying next fallback...")
+            
+    raise last_exception
+
 # --- USER AUTHENTICATION ROUTES ---
 
 @app.route('/api/register', methods=['POST'])
@@ -136,16 +153,8 @@ def generate():
         if previous_code:
             full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
 
-        # Working fallback model structure
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(full_prompt)
-        except Exception as api_err:
-            print(f"Switching to backup model due to: {api_err}")
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(full_prompt)
+        generated_code = call_gemini_model(full_prompt)
 
-        generated_code = response.text
         if "```html" in generated_code:
             generated_code = generated_code.split("```html")[1].split("```")[0].strip()
         elif "```" in generated_code:
@@ -175,9 +184,8 @@ def enhance_prompt():
 
     try:
         genai.configure(api_key=DEFAULT_GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}")
-        return jsonify({'status': 'success', 'enhanced_prompt': response.text.strip()})
+        enhanced_text = call_gemini_model(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}")
+        return jsonify({'status': 'success', 'enhanced_prompt': enhanced_text.strip()})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -194,11 +202,9 @@ def auto_fix():
 
     try:
         genai.configure(api_key=active_api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
-        response = model.generate_content(prompt)
+        fixed_code = call_gemini_model(prompt)
         
-        fixed_code = response.text
         if "```html" in fixed_code:
             fixed_code = fixed_code.split("```html")[1].split("```")[0].strip()
         elif "```" in fixed_code:

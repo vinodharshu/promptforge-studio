@@ -71,7 +71,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:5500",
     "http://127.0.0.1:5000",
     "http://localhost:5000",
-    "https://promptforge-studio.onrender.com"
+    "https://promptforge-studio-frontend.onrender.com"
 ]
 # Let an extra frontend origin (e.g. a preview deploy) be added without a
 # code change/redeploy.

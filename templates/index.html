@@ -365,14 +365,42 @@
             }
         }
 
-        function enhancePrompt() {
+        async function enhancePrompt() {
             const promptBox = document.getElementById('promptInput');
+            const customApiKey = document.getElementById('customApiKey').value;
             let text = promptBox.value.trim();
             if(!text) return alert('Please enter a short prompt first!');
 
-            const enhancedText = `Create a fully responsive, modern web application for: "${text}".\n- UI Features: Dark theme, glassmorphism UI, soft gradient buttons, Tailwind CSS.\n- Functional Features: Clean animations, interactive user controls, responsive viewports, and clean UI components.\n- Make it fully functional with dynamic JavaScript logic.`;
+            const enhanceBtn = document.querySelector('button[onclick="enhancePrompt()"]');
+            const originalLabel = enhanceBtn ? enhanceBtn.innerHTML : null;
+            if (enhanceBtn) {
+                enhanceBtn.disabled = true;
+                enhanceBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Enhancing...';
+            }
 
-            promptBox.value = enhancedText;
+            try {
+                const response = await fetch(`${API_BASE_URL}/enhance-prompt`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
+                    body: JSON.stringify({ prompt: text, api_key: customApiKey })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success' && result.enhanced_prompt) {
+                    promptBox.value = result.enhanced_prompt;
+                } else {
+                    showErrorToast(result.message || 'Failed to enhance prompt.');
+                }
+            } catch (err) {
+                showErrorToast('Connection error while enhancing prompt.');
+            } finally {
+                if (enhanceBtn && originalLabel !== null) {
+                    enhanceBtn.disabled = false;
+                    enhanceBtn.innerHTML = originalLabel;
+                }
+            }
         }
 
         function setViewport(mode) {

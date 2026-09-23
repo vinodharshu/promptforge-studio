@@ -149,7 +149,11 @@ except Exception as db_init_err:
 # 2.5 -> 3.x) don't silently break this app again; pinned versions follow as
 # a safety net in case an alias is ever retired.
 def call_gemini_model(prompt_text):
+    # Gemini 1.5 Flash மிகவும் வேகமானது
     models_to_try = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0-flash-exp'
         'gemini-flash-latest',
         'gemini-3.5-flash',
         'gemini-3.1-flash-lite',
@@ -160,11 +164,15 @@ def call_gemini_model(prompt_text):
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt_text)
+            # request_options-ல் timeout 120 வினாடிகள் என அமைக்கப்படுகிறது
+            response = model.generate_content(
+                prompt_text,
+                request_options={"timeout": 120}
+            )
             return response.text
         except Exception as e:
             last_exception = e
-            print(f"Model {model_name} failed: {e}. Trying next...")
+            print(f"Model {model_name} failed or timed out: {e}. Trying next...")
             
     raise last_exception
 

@@ -199,7 +199,7 @@
     </div>
 
     <script>
-        const API_BASE_URL ="https://promptforge-studio.onrender.com";
+        const API_BASE_URL = (window.API_BASE_URL || "https://promptforge-studio.onrender.com").replace(/\/$/, "");
 
         let currentCode = "";
         let historyData = [];
@@ -325,10 +325,15 @@
             
             banner.innerHTML = `
                 <span class="text-sm">⚠️ Runtime Error Detected!</span>
-                <button onclick="fixCodeWithAI('${encodeURIComponent(errorMsg)}')" class="bg-white text-red-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-gray-100">
+                <button id="autoFixButton" class="bg-white text-red-600 px-3 py-1 rounded-md text-xs font-bold hover:bg-gray-100">
                     Auto-Fix with AI ✨
                 </button>
             `;
+
+            const autoFixButton = document.getElementById("autoFixButton");
+            if (autoFixButton) {
+                autoFixButton.onclick = () => fixCodeWithAI(errorMsg);
+            }
         }
 
         async function fixCodeWithAI(errorMsg) {
@@ -477,7 +482,13 @@
                     })
                 });
 
-                const result = await response.json();
+                const responseText = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(responseText);
+                } catch (parseError) {
+                    throw new Error(`Backend returned HTTP ${response.status}: ${responseText.slice(0, 300)}`);
+                }
                 
                 if(result.status === 'success') {
                     currentCode = result.code;
@@ -493,7 +504,7 @@
                 }
             } catch (err) {
                 status.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Connection Error`;
-                alert("Connection failed. Please check if Python Flask backend is running.");
+                alert("Generate failed: " + (err.message || "Backend connection failed."));
             } finally {
                 loadingOverlay.classList.add('hidden');
             }

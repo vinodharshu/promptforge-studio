@@ -1,114 +1,106 @@
 import os
 import secrets
+import logging
 from flask import Flask, send_from_directory, request, jsonify, session
 from flask_cors import CORS
 from importlib import import_module
 from werkzeug.security import generate_password_hash, check_password_hash
 import google.generativeai as genai
 
-# Load the optional extension dynamically so static analyzers do not report a
-# missing direct import when the dependency is installed only at runtime.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load the optional extension dynamically
 SQLAlchemy = import_module('flask_sqlalchemy').SQLAlchemy
 
 app = Flask(__name__, static_folder='.', template_folder='.')
 
-# Are we running locally (dev) or deployed (prod)?
-# Render (and most PaaS hosts) set PORT; treat FLASK_ENV=development as the
-# explicit local-dev override.
 IS_PROD = os.getenv("FLASK_ENV", "production").lower() != "development"
 
-# 1. Secret Key setup for sessions
-# NEVER hardcode a real secret key in source control — a previous version of
-# this file shipped a fixed fallback key, which means every deployment that
-# didn't set SECRET_KEY shared (and leaked) the same signing key, letting
-# anyone forge session cookies. Always set SECRET_KEY in your environment for
-# production; the random fallback below only keeps local/dev runs working and
-# will invalidate sessions on every restart.
-app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
-if IS_PROD and not os.getenv("SECRET_KEY","e63b91911951c497ab7b17f46bab4a168f8091ab206900e03c477c74f9f166d1"):
-    print("⚠️  WARNING: SECRET_KEY is not set. Using a random key that changes "
-          "on every restart (all existing sessions will be invalidated). Set "
-          "the SECRET_KEY environment variable in production.")
+# 1. Secret key setup
+configured_secret = os.getenv("SECRET_KEY", "552de9df2adc0c199afaf34f7c994eb3152c9df9b2d32638bbbb1642a335fef9").strip()
+if not configured_secret:
+    configured_secret = secrets.token_hex(32)
+    logger.warning("SECRET_KEY is not set. A temporary key is being used.")
 
-# 2. Session Cookie Handling
-# SameSite=None + Secure is required for the cross-origin (different
-# subdomain) frontend/backend setup this app uses, but Secure cookies are
-# refused by browsers over plain http, which breaks cookie-based login when
-# testing locally at http://127.0.0.1:5000. Relax this only in explicit dev.
-app.config['SESSION_COOKIE_SAMESITE'] = 'None' if IS_PROD else 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = IS_PROD
-app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.secret_key = configured_secret
 
-# 3. SQL DATABASE CONFIGURATION (Supports PostgreSQL, MySQL, SQLite)
-# Render's managed Postgres gives a DATABASE_URL starting with "postgres://",
-# which SQLAlchemy 1.4+ rejects (it requires "postgresql://"). If DATABASE_URL
-# isn't set at all (e.g. no DB attached yet), fall back to a local SQLite file
-# instead of crashing — note that Render's filesystem is ephemeral, so SQLite
-# data will NOT survive a redeploy/restart there; attach a real Postgres
-# instance for anything you need to persist.
-db_url = os.getenv("DATABASE_URL", "sqlite:///database.db")
+# 2. Session cookie settings
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = IS_PROD
+app.config["SESSION_COOKIE_SAMESITE"] = (
+    os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+    if not IS_PROD
+    else os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+)
+
+# 3. SQL DATABASE CONFIGURATION
+db_url = os.getenv("DATABASE_URL", "").strip()
+
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if not db_url:
+    logger.warning(
+        "DATABASE_URL is missing. Using local SQLite database. "
+        "Configure PostgreSQL on Render for persistent production storage."
+    )
+    db_url = "sqlite:///database.db"
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 if db_url.startswith("postgresql://"):
-    # Render's free-tier Postgres silently drops idle connections, which
-    # otherwise surfaces as random "SSL connection has been closed
-    # unexpectedly" runtime errors on the first request after a quiet period.
-    # pool_pre_ping checks the connection before using it and transparently
-    # reconnects; pool_recycle keeps connections from going stale.
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_pre_ping': True,
-        'pool_recycle': 280,
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
     }
 
 db = SQLAlchemy(app)
 
 # 4. CORS Configuration
-ALLOWED_ORIGINS = [
+default_origins = [
     "http://127.0.0.1:5500",
     "http://localhost:5500",
     "http://127.0.0.1:5000",
     "http://localhost:5000",
-    "https://promptforge-studio-frontend.onrender.com"
 ]
-# Let an extra frontend origin (e.g. a preview deploy) be added without a
-# code change/redeploy.
-extra_origin = os.getenv("https://promptforge-studio-frondend.onrender.com")
-if extra_origin and extra_origin not in ALLOWED_ORIGINS:
-    ALLOWED_ORIGINS.append(extra_origin)
 
-CORS(app, supports_credentials=True, origins=ALLOWED_ORIGINS)
+configured_origins = os.getenv("FRONTEND_URL") or os.getenv("FRONTEND_ORIGIN") or ""
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in configured_origins.split(",")
+    if origin.strip()
+]
+
+ALLOWED_ORIGINS.extend(
+    origin for origin in default_origins
+    if origin not in ALLOWED_ORIGINS
+)
+
+CORS(
+    app,
+    supports_credentials=True,
+    origins=ALLOWED_ORIGINS
+)
 
 @app.before_request
 def _log_cross_origin_requests():
-    # Diagnostic only — helps you see in Render's logs exactly which Origin
-    # a failing request came from, so you can confirm it's actually in
-    # ALLOWED_ORIGINS. A mismatch here (e.g. your frontend's real Render URL
-    # isn't in the list) makes the browser block the response client-side,
-    # which shows up in the UI as a generic "Network Error" even though this
-    # log line will show the request arrived fine.
     origin = request.headers.get('Origin')
     if origin and origin not in ALLOWED_ORIGINS:
-        print(f"⚠️  Request from origin '{origin}' is NOT in ALLOWED_ORIGINS {ALLOWED_ORIGINS} "
-              f"— the browser will block this response. Add it via the FRONTEND_URL env var.")
+        print(f"⚠️ Request from origin '{origin}' is NOT in ALLOWED_ORIGINS")
 
 @app.errorhandler(Exception)
 def _handle_uncaught_exception(e):
-    # Without this, any unhandled exception in a route becomes Flask's
-    # default HTML error page. The frontend always does `await res.json()`,
-    # and parsing HTML as JSON throws — which lands in the same catch block
-    # as an actual network failure and shows "Network Error. Check backend
-    # connection.", even though the backend was up and responding. Returning
-    # JSON here means real backend errors show up as real backend errors.
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
         return jsonify({'status': 'error', 'message': e.description}), e.code
     print(f"Unhandled exception: {e}")
     return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
 
-DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Global GEMINI API KEY setup
+raw_key = os.getenv("GEMINI_API_KEY", "")
+DEFAULT_GEMINI_API_KEY = raw_key.strip().strip("'").strip('"') if raw_key else ""
 
 # --- SQL MODELS ---
 class User(db.Model):
@@ -126,54 +118,74 @@ class App(db.Model):
     prompt = db.Column(db.Text, nullable=False)
     code = db.Column(db.Text, nullable=False)
 
-try:
-    with app.app_context():
-        db.create_all()
-except Exception as db_init_err:
-    # If the DB is unreachable at boot (e.g. Postgres not provisioned yet,
-    # wrong DATABASE_URL, network hiccup on Render's side), don't take the
-    # whole server down — log it loudly and keep serving. Routes that need
-    # the DB will fail individually with a clear error instead of the
-    # process crash-looping.
-    print(f"⚠️  WARNING: Database initialization failed: {db_init_err}")
-    print("   The server will still start, but DB-dependent routes "
-          "(/api/register, /api/login, /generate, /history, ...) will "
-          "error until this is fixed.")
+def initialize_database():
+    try:
+        with app.app_context():
+            db.create_all()
+        logger.info("Database initialization completed.")
+    except Exception:
+        logger.exception(
+            "Database initialization failed. "
+            "The application will continue starting."
+        )
 
-# Helper function to generate content with fallback models
-#
-# NOTE ON MODEL NAMES: gemini-1.5-flash / gemini-1.5-pro have been fully shut
-# down (every request now 404s), and the gemini-2.0-flash line was shut down
-# June 1, 2026 — so the previous fallback list would fail on every model.
-# "-latest" aliases are used first so Google's automatic version bumps (e.g.
-# 2.5 -> 3.x) don't silently break this app again; pinned versions follow as
-# a safety net in case an alias is ever retired.
-def call_gemini_model(prompt_text):
-    # Gemini 1.5 Flash மிகவும் வேகமானது
-    models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-2.0-flash-exp'
-        'gemini-flash-latest',
-        'gemini-3.5-flash',
-        'gemini-3.1-flash-lite',
-        'gemini-pro-latest',
-    ]
-    last_exception = Exception("No models responded successfully.")
-     
-    for model_name in models_to_try:
+initialize_database()
+
+# --- FIXED GEMINI HELPER FUNCTION ---
+def call_gemini_model(prompt_text, api_key=None):
+    key_to_use = api_key if api_key else DEFAULT_GEMINI_API_KEY
+    clean_key = key_to_use.strip().strip("'").strip('"')
+    
+    if not clean_key:
+        raise ValueError("Gemini API key is missing.")
+
+    # REST transport helps avoid some gRPC metadata issues.
+    genai.configure(api_key=clean_key, transport="rest")
+
+    # Current model order. You can override it in Render with GEMINI_MODEL.
+    # Do not use retired 2.0/1.5 models here.
+    configured_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    models_to_try = [configured_model]
+
+    # Small fallback list for projects that do not yet have access to the newest model.
+    for fallback in ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"):
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    last_exception = Exception("No Gemini model responded successfully.")
+
+    for index, model_name in enumerate(models_to_try):
         try:
+            logger.info("Trying Gemini model: %s", model_name)
             model = genai.GenerativeModel(model_name)
-            # request_options-ல் timeout 120 வினாடிகள் என அமைக்கப்படுகிறது
             response = model.generate_content(
                 prompt_text,
-                request_options={"timeout": 120}
+                request_options={"timeout": 75}
             )
-            return response.text
+            response_text = getattr(response, "text", None)
+            if response_text and response_text.strip():
+                return response_text.strip()
+
+            last_exception = RuntimeError(
+                f"Model {model_name} returned an empty response."
+            )
+
         except Exception as e:
             last_exception = e
-            print(f"Model {model_name} failed or timed out: {e}. Trying next...")
-            
+            logger.warning(
+                "Gemini model %s failed: %s",
+                model_name,
+                e
+            )
+            # Continue only when a model is unavailable. For other errors,
+            # trying multiple models can make Render hit its request timeout.
+            error_text = str(e).lower()
+            unavailable = any(term in error_text for term in (
+                "not found", "not supported", "404", "unknown model", "invalid model"
+            ))
+            if not unavailable:
+                break
+
     raise last_exception
 
 # --- ROOT ROUTE ---
@@ -209,12 +221,6 @@ def register():
         return jsonify({'status': 'success', 'message': 'User registered successfully!'})
     except Exception as e:
         db.session.rollback()
-        # Previously the query above wasn't wrapped, so a DB outage raised an
-        # unhandled exception -> Flask's default HTML 500 page -> the
-        # frontend's `await res.json()` throws a SyntaxError trying to parse
-        # HTML as JSON -> shows up to the user as "Network Error. Check
-        # backend connection." even though the backend was actually up.
-        # Always returning JSON here fixes that class of false alarm.
         print(f"[/api/register] DB error: {e}")
         return jsonify({'status': 'error', 'message': 'Database error. Please try again shortly.'}), 500
 
@@ -249,13 +255,18 @@ def user_status():
         return jsonify({'logged_in': True, 'username': session['username']})
     return jsonify({'logged_in': False})
 
-# --- HEALTH CHECK (no DB, no Gemini — use this to confirm the backend
-# itself is reachable, independent of everything else) ---
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
 
 
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({
+        "status": "ok",
+        "database_configured": bool(os.getenv("DATABASE_URL")),
+        "gemini_configured": bool(DEFAULT_GEMINI_API_KEY),
+    }), 200
 
 # --- GENERATE APP ROUTE ---
 
@@ -265,9 +276,9 @@ def generate():
         return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
 
     data = request.get_json() or {}
-    user_prompt = data.get('prompt', '')
+    user_prompt = str(data.get('prompt') or '')
     previous_code = data.get('previous_code', '')
-    custom_api_key = data.get('api_key', '').strip()
+    custom_api_key = str(data.get('api_key') or '').strip()
 
     if not user_prompt:
         return jsonify({'status': 'error', 'message': 'Prompt is required!'}), 400
@@ -278,8 +289,6 @@ def generate():
         return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     try:
-        genai.configure(api_key=active_api_key)
-
         system_instruction = (
             "You are a World-Class UI/UX & Web Developer.\n"
             "CRITICAL UPDATE RULE:\n"
@@ -296,15 +305,13 @@ def generate():
         if previous_code:
             full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
 
-        generated_code = call_gemini_model(full_prompt)
+        generated_code = call_gemini_model(full_prompt, api_key=active_api_key)
 
         if "```html" in generated_code:
             generated_code = generated_code.split("```html")[1].split("```")[0].strip()
         elif "```" in generated_code:
             generated_code = generated_code.split("```")[1].split("```")[0].strip()
 
-        # Save to history, but don't fail the whole request if only the save
-        # fails — the user still gets their generated app back either way.
         try:
             new_app = App(user_id=session['user_id'], prompt=user_prompt, code=generated_code)
             db.session.add(new_app)
@@ -326,8 +333,8 @@ def enhance_prompt():
         return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
 
     data = request.get_json() or {}
-    raw_prompt = data.get('prompt', '')
-    custom_api_key = data.get('api_key', '').strip()
+    raw_prompt = str(data.get('prompt') or '')
+    custom_api_key = str(data.get('api_key') or '').strip()
 
     if not raw_prompt:
         return jsonify({'status': 'error', 'message': 'Prompt required'}), 400
@@ -337,8 +344,7 @@ def enhance_prompt():
         return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     try:
-        genai.configure(api_key=active_api_key)
-        enhanced_text = call_gemini_model(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}")
+        enhanced_text = call_gemini_model(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}", api_key=active_api_key)
         return jsonify({'status': 'success', 'enhanced_prompt': enhanced_text.strip()})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -353,16 +359,15 @@ def auto_fix():
     data = request.get_json() or {}
     code = data.get('code', '')
     error_msg = data.get('error', '')
-    custom_api_key = data.get('api_key', '').strip()
+    custom_api_key = str(data.get('api_key') or '').strip()
 
     active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
     if not active_api_key:
         return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     try:
-        genai.configure(api_key=active_api_key)
         prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
-        fixed_code = call_gemini_model(prompt)
+        fixed_code = call_gemini_model(prompt, api_key=active_api_key)
         
         if "```html" in fixed_code:
             fixed_code = fixed_code.split("```html")[1].split("```")[0].strip()
@@ -409,10 +414,11 @@ def clear_history():
     return jsonify({'status': 'success'})
 
 # --- MAIN SERVER RUNNER ---
-if __name__ == '__main__':
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # debug=True exposes Werkzeug's interactive debugger, which allows remote
-    # code execution if it's ever reachable in production. Only enable it
-    # when FLASK_ENV=development is explicitly set.
-    print(f"🚀 Server running on port {port} (debug={not IS_PROD})")
-    app.run(host='0.0.0.0', port=port, debug=not IS_PROD)
+    logger.info("Server running on port %s", port)
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )

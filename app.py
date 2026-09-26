@@ -1,60 +1,114 @@
-# app.py
-import os, logging
-from flask import Flask, request, jsonify, session, send_from_directory
+import os
+import secrets
+import logging
+from flask import Flask, send_from_directory, request, jsonify, session
 from flask_cors import CORS
-from datetime import date
-from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy.exc import SQLAlchemyError
 from importlib import import_module
+from werkzeug.security import generate_password_hash, check_password_hash
+import google.generativeai as genai
 
-# Use new Google GenAI SDK (deprecated google-generativeai)
-from google import genai  
-
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Flask app setup
+# Load the optional extension dynamically
+SQLAlchemy = import_module('flask_sqlalchemy').SQLAlchemy
+
 app = Flask(__name__, static_folder='.', template_folder='.')
-# 1. SECRET_KEY (required)
+
+IS_PROD = os.getenv("FLASK_ENV", "production").lower() != "development"
+
+# 1. Secret key setup
 configured_secret = os.getenv("SECRET_KEY", "").strip()
 if not configured_secret:
-    logger.error("SECRET_KEY is not set in environment!")
-    raise RuntimeError("SECRET_KEY environment variable must be set")
-app.secret_key = configured_secret
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SECURE"] = True  # assume production (HTTPS)
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    configured_secret = secrets.token_hex(32)
+    logger.warning("SECRET_KEY is not set. A temporary key is being used.")
 
-# 2. Database configuration (Postgres recommended)
+app.secret_key = configured_secret
+
+# 2. Session cookie settings
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = IS_PROD
+app.config["SESSION_COOKIE_SAMESITE"] = (
+    os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+    if not IS_PROD
+    else os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+)
+
+# 3. SQL DATABASE CONFIGURATION
 db_url = os.getenv("DATABASE_URL", "").strip()
+
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
+
 if not db_url:
-    logger.warning("DATABASE_URL not set; using SQLite (not persistent)")
+    logger.warning(
+        "DATABASE_URL is missing. Using local SQLite database. "
+        "Configure PostgreSQL on Render for persistent production storage."
+    )
     db_url = "sqlite:///database.db"
-elif db_url.startswith("sqlite"):
-    logger.warning("Using SQLite on Render is not persistent! Use Postgres.")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-SQLAlchemy = import_module('flask_sqlalchemy').SQLAlchemy
+
+if db_url.startswith("postgresql://"):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+    }
+
 db = SQLAlchemy(app)
 
-# 3. CORS (allow frontend origin if needed; here wildcard for same origin + Render)
-CORS(app, supports_credentials=True, origins=["*"])
+# 4. CORS Configuration
+default_origins = [
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000",
+]
 
-# Models
+configured_origins = os.getenv("FRONTEND_URL") or os.getenv("FRONTEND_ORIGIN") or ""
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in configured_origins.split(",")
+    if origin.strip()
+]
+
+ALLOWED_ORIGINS.extend(
+    origin for origin in default_origins
+    if origin not in ALLOWED_ORIGINS
+)
+
+CORS(
+    app,
+    supports_credentials=True,
+    origins=ALLOWED_ORIGINS
+)
+
+@app.before_request
+def _log_cross_origin_requests():
+    origin = request.headers.get('Origin')
+    if origin and origin not in ALLOWED_ORIGINS:
+        print(f"⚠️ Request from origin '{origin}' is NOT in ALLOWED_ORIGINS")
+
+@app.errorhandler(Exception)
+def _handle_uncaught_exception(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return jsonify({'status': 'error', 'message': e.description}), e.code
+    print(f"Unhandled exception: {e}")
+    return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
+
+# Global GEMINI API KEY setup
+raw_key = os.getenv("GEMINI_API_KEY", "")
+DEFAULT_GEMINI_API_KEY = raw_key.strip().strip("'").strip('"') if raw_key else ""
+
+# --- SQL MODELS ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    # per-user daily usage tracking
-    generation_count = db.Column(db.Integer, default=0)
-    enhancement_count = db.Column(db.Integer, default=0)
-    autofix_count = db.Column(db.Integer, default=0)
-    usage_date = db.Column(db.Date, nullable=True)
+    api_key = db.Column(db.String(255), default='')
     apps = db.relationship('App', backref='owner', lazy=True)
 
 class App(db.Model):
@@ -64,120 +118,136 @@ class App(db.Model):
     prompt = db.Column(db.Text, nullable=False)
     code = db.Column(db.Text, nullable=False)
 
-# Initialize DB
-try:
-    with app.app_context():
-        db.create_all()
-    logger.info("Database initialization completed.")
-except Exception as e:
-    logger.exception("Database initialization failed.")
-
-# 4. Gemini API Key (required)
-DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().strip("'").strip('"')
-if not DEFAULT_GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY not set in environment!")
-    raise RuntimeError("GEMINI_API_KEY environment variable must be set")
-
-# Helper: reset usage counts if a new day
-def reset_usage_if_needed(user):
-    today = date.today()
-    if user.usage_date != today:
-        user.generation_count = 0
-        user.enhancement_count = 0
-        user.autofix_count = 0
-        user.usage_date = today
-        db.session.commit()
-
-# Helper: enforce per-user quotas (e.g. 10 operations/day)
-DAILY_LIMIT = 10
-def increment_usage(user, field):
-    reset_usage_if_needed(user)
-    if getattr(user, field) >= DAILY_LIMIT:
-        return False
-    setattr(user, field, getattr(user, field) + 1)
-    user.usage_date = date.today()
-    db.session.commit()
-    return True
-
-# Gemini API call (GenAI SDK)
-def call_gemini_model(prompt_text):
-    client = genai.Client(api_key=DEFAULT_GEMINI_API_KEY)
+def initialize_database():
     try:
-        # Generate content with system instruction handled outside
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt_text
+        with app.app_context():
+            db.create_all()
+        logger.info("Database initialization completed.")
+    except Exception:
+        logger.exception(
+            "Database initialization failed. "
+            "The application will continue starting."
         )
-        return response.text or ""
-    except Exception as e:
-        err = str(e).lower()
-        if "exhausted" in err or "quota" in err or "429" in err:
-            raise RuntimeError("QuotaExceeded") from e
-        raise
 
-@app.errorhandler(Exception)
-def handle_exception(e):
-    if hasattr(e, 'code'):
-        return jsonify({'status':'error','error_type':'server','message': e.description}), e.code
-    logger.exception("Unhandled exception")
-    return jsonify({'status':'error','error_type':'server','message':'Internal server error'}), 500
+initialize_database()
 
-# --- Routes ---
+# --- FIXED GEMINI HELPER FUNCTION ---
+def call_gemini_model(prompt_text, api_key=None):
+    key_to_use = api_key if api_key else DEFAULT_GEMINI_API_KEY
+    clean_key = key_to_use.strip().strip("'").strip('"')
+    
+    if not clean_key:
+        raise ValueError("Gemini API key is missing.")
 
+    # REST transport helps avoid some gRPC metadata issues.
+    genai.configure(api_key=clean_key, transport="rest")
+
+    # Current model order. You can override it in Render with GEMINI_MODEL.
+    # Do not use retired 2.0/1.5 models here.
+    configured_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    models_to_try = [configured_model]
+
+    # Small fallback list for projects that do not yet have access to the newest model.
+    for fallback in ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"):
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    last_exception = Exception("No Gemini model responded successfully.")
+
+    for index, model_name in enumerate(models_to_try):
+        try:
+            logger.info("Trying Gemini model: %s", model_name)
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(
+                prompt_text,
+                request_options={"timeout": 75}
+            )
+            response_text = getattr(response, "text", None)
+            if response_text and response_text.strip():
+                return response_text.strip()
+
+            last_exception = RuntimeError(
+                f"Model {model_name} returned an empty response."
+            )
+
+        except Exception as e:
+            last_exception = e
+            logger.warning(
+                "Gemini model %s failed: %s",
+                model_name,
+                e
+            )
+            # Continue only when a model is unavailable. For other errors,
+            # trying multiple models can make Render hit its request timeout.
+            error_text = str(e).lower()
+            unavailable = any(term in error_text for term in (
+                "not found", "not supported", "404", "unknown model", "invalid model"
+            ))
+            if not unavailable:
+                break
+
+    raise last_exception
+
+# --- ROOT ROUTE ---
 @app.route('/')
 def index():
-    # Serve the index.html (static in root)
-    return send_from_directory('.', 'index.html')
+    if os.path.exists(os.path.join(app.root_path, 'templates', 'index.html')):
+        return send_from_directory('templates', 'index.html')
+    elif os.path.exists(os.path.join(app.root_path, 'index.html')):
+        return send_from_directory('.', 'index.html')
+    else:
+        return "PromptForge Backend Service Running Successfully!", 200
 
-@app.route('/api/health')
-def health():
-    return jsonify({
-        "status": "ok",
-        "database_configured": bool(os.getenv("DATABASE_URL")),
-        "gemini_configured": bool(DEFAULT_GEMINI_API_KEY)
-    }), 200
+# --- USER AUTHENTICATION ROUTES ---
 
-# Authentication
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json() or {}
-    username = data.get('username','').strip()
-    password = data.get('password','').strip()
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
     if not username or not password:
-        return jsonify({'status':'error','error_type':'auth','message':'Username and password required!'}), 400
+        return jsonify({'status': 'error', 'message': 'Username and password required!'}), 400
+
     try:
         if User.query.filter_by(username=username).first():
-            return jsonify({'status':'error','error_type':'auth','message':'Username already exists!'}), 400
-        hashed = generate_password_hash(password)
-        user = User(username=username, password=hashed)
-        db.session.add(user); db.session.commit()
-        return jsonify({'status':'success','message':'User registered successfully!'})
-    except SQLAlchemyError as e:
+            return jsonify({'status': 'error', 'message': 'Username already exists!'}), 400
+
+        hashed_password = generate_password_hash(password)
+        new_user = User(username=username, password=hashed_password)
+
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'User registered successfully!'})
+    except Exception as e:
         db.session.rollback()
-        logger.error(f"DB error on register: {e}")
-        return jsonify({'status':'error','error_type':'db','message':'Database error. Try again later.'}), 500
+        print(f"[/api/register] DB error: {e}")
+        return jsonify({'status': 'error', 'message': 'Database error. Please try again shortly.'}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json() or {}
-    username = data.get('username','').strip()
-    password = data.get('password','').strip()
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
     try:
         user = User.query.filter_by(username=username).first()
-    except SQLAlchemyError as e:
-        logger.error(f"DB error on login: {e}")
-        return jsonify({'status':'error','error_type':'db','message':'Database error. Try again later.'}), 500
+    except Exception as e:
+        print(f"[/api/login] DB error: {e}")
+        return jsonify({'status': 'error', 'message': 'Database error. Please try again shortly.'}), 500
+
     if user and check_password_hash(user.password, password):
         session['user_id'] = user.id
         session['username'] = user.username
         session.modified = True
-        return jsonify({'status':'success','username': user.username})
-    return jsonify({'status':'error','error_type':'auth','message':'Invalid credentials!'}), 401
+        return jsonify({'status': 'success', 'username': user.username})
+        
+    return jsonify({'status': 'error', 'message': 'Invalid credentials!'}), 401
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
     session.clear()
-    return jsonify({'status':'success','message':'Logged out'})
+    return jsonify({'status': 'success', 'message': 'Logged out successfully!'})
 
 @app.route('/api/user-status', methods=['GET'])
 def user_status():
@@ -185,149 +255,170 @@ def user_status():
         return jsonify({'logged_in': True, 'username': session['username']})
     return jsonify({'logged_in': False})
 
-# --- Generate App ---
-@app.route('/api/generate', methods=['POST'])
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'})
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({
+        "status": "ok",
+        "database_configured": bool(os.getenv("DATABASE_URL")),
+        "gemini_configured": bool(DEFAULT_GEMINI_API_KEY),
+    }), 200
+
+# --- GENERATE APP ROUTE ---
+
+@app.route('/generate', methods=['POST'])
 def generate():
     if 'user_id' not in session:
-        return jsonify({'status':'error','error_type':'auth','message':'Please login first!'}), 401
+        return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
+
     data = request.get_json() or {}
-    user_prompt = str(data.get('prompt',''))
-    prev_code = data.get('previous_code','')
+    user_prompt = str(data.get('prompt') or '')
+    previous_code = data.get('previous_code', '')
+    custom_api_key = str(data.get('api_key') or '').strip()
+
     if not user_prompt:
-        return jsonify({'status':'error','error_type':'request','message':'Prompt is required!'}), 400
+        return jsonify({'status': 'error', 'message': 'Prompt is required!'}), 400
 
-    # Enforce per-user quota
-    user = User.query.get(session['user_id'])
-    reset_usage_if_needed(user)
-    if not increment_usage(user, 'generation_count'):
-        return jsonify({'status':'error','error_type':'quota','message':'Daily generation quota reached'}), 429
+    active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
 
-    # System instruction for generation
-    system_instruction = (
-        "You are a world-class UI/UX and web developer. "
-        "Generate a single-file, mobile-responsive HTML+CSS (Tailwind) web app based on the user prompt. "
-        "Use Tailwind CSS breakpoints (sm, md, lg, etc.) for mobile-first design, and ensure no horizontal scrolling. "
-        "Output only valid HTML (with <!DOCTYPE html>), no markdown formatting or code fences. "
-        "If updating existing code, preserve the core app and only apply requested changes."
-    )
-    full_prompt = f"{system_instruction}\n\nUSER PROMPT: {user_prompt}\n"
-    if prev_code:
-        full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{prev_code}"
+    if not active_api_key:
+        return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     try:
-        generated_code = call_gemini_model(full_prompt)
-    except RuntimeError as e:
-        # Quota exceeded by Gemini
-        return jsonify({'status':'error','error_type':'quota','message':'Gemini API quota exceeded'}), 429
+        system_instruction = (
+            "You are a World-Class UI/UX & Web Developer.\n"
+            "CRITICAL UPDATE RULE:\n"
+            "- If 'PREVIOUS CODE' is provided, modify the EXISTING code.\n"
+            "- DO NOT create a completely new topic or app.\n"
+            "- ONLY apply requested changes on top of existing code.\n\n"
+            "OUTPUT RULES:\n"
+            "1. Return ONLY single-file valid HTML code with embedded CSS/JS.\n"
+            "2. Do NOT wrap code in markdown. Return RAW HTML ONLY.\n"
+            "3. Use Tailwind CSS via CDN inside <head>.\n"
+        )
+
+        full_prompt = f"{system_instruction}\n\nUSER PROMPT: {user_prompt}\n"
+        if previous_code:
+            full_prompt += f"\nPREVIOUS CODE TO MODIFY:\n{previous_code}"
+
+        generated_code = call_gemini_model(full_prompt, api_key=active_api_key)
+
+        if "```html" in generated_code:
+            generated_code = generated_code.split("```html")[1].split("```")[0].strip()
+        elif "```" in generated_code:
+            generated_code = generated_code.split("```")[1].split("```")[0].strip()
+
+        try:
+            new_app = App(user_id=session['user_id'], prompt=user_prompt, code=generated_code)
+            db.session.add(new_app)
+            db.session.commit()
+        except Exception as db_err:
+            db.session.rollback()
+            print(f"Failed to save app to history: {db_err}")
+
+        return jsonify({'status': 'success', 'code': generated_code})
+
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        return jsonify({'status':'error','error_type':'gemini','message':'AI generation failed'}), 500
+        return jsonify({'status': 'error', 'message': f"Gemini API Error: {str(e)}"}), 500
 
-    # Strip Markdown fences if present
-    if "```" in generated_code:
-        parts = generated_code.split("```")
-        generated_code = parts[1] if len(parts)>2 else parts[0]
+# --- ENHANCE PROMPT ROUTE ---
 
-    # Basic validation
-    if "<!DOCTYPE html" not in generated_code[:50]:
-        logger.error("Invalid HTML output from Gemini")
-        return jsonify({'status':'error','error_type':'format','message':'Invalid HTML output from AI'}), 502
-
-    # Save to history (ignore DB errors)
-    try:
-        new_app = App(user_id=session['user_id'], prompt=user_prompt, code=generated_code)
-        db.session.add(new_app)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        logger.warning(f"Failed to save history: {e}")
-
-    return jsonify({'status':'success','code': generated_code})
-
-# --- Enhance Prompt ---
-@app.route('/api/enhance-prompt', methods=['POST'])
+@app.route('/enhance-prompt', methods=['POST'])
 def enhance_prompt():
     if 'user_id' not in session:
-        return jsonify({'status':'error','error_type':'auth','message':'Please login first!'}), 401
-    data = request.get_json() or {}
-    raw_prompt = str(data.get('prompt','')).strip()
-    if not raw_prompt:
-        return jsonify({'status':'error','error_type':'request','message':'Prompt required'}), 400
+        return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
 
-    # Enforce per-user quota
-    user = User.query.get(session['user_id'])
-    reset_usage_if_needed(user)
-    if not increment_usage(user, 'enhancement_count'):
-        return jsonify({'status':'error','error_type':'quota','message':'Daily enhancement quota reached'}), 429
+    data = request.get_json() or {}
+    raw_prompt = str(data.get('prompt') or '')
+    custom_api_key = str(data.get('api_key') or '').strip()
+
+    if not raw_prompt:
+        return jsonify({'status': 'error', 'message': 'Prompt required'}), 400
+
+    active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
+    if not active_api_key:
+        return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     try:
-        enhanced_text = call_gemini_model(f"Improve this UI request for clarity and detail: {raw_prompt}")
-        return jsonify({'status':'success','enhanced_prompt': enhanced_text.strip()})
-    except RuntimeError as e:
-        return jsonify({'status':'error','error_type':'quota','message':'Gemini API quota exceeded'}), 429
+        enhanced_text = call_gemini_model(f"Expand and detail this web app UI request for high quality generation: {raw_prompt}", api_key=active_api_key)
+        return jsonify({'status': 'success', 'enhanced_prompt': enhanced_text.strip()})
     except Exception as e:
-        logger.error(f"Enhance prompt error: {e}")
-        return jsonify({'status':'error','error_type':'gemini','message': str(e)}), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# --- Auto-Fix JS/HTML Error ---
-@app.route('/api/auto-fix', methods=['POST'])
+# --- AUTO FIX ROUTE ---
+
+@app.route('/auto-fix', methods=['POST'])
 def auto_fix():
     if 'user_id' not in session:
-        return jsonify({'status':'error','error_type':'auth','message':'Please login first!'}), 401
+        return jsonify({'status': 'error', 'message': 'Please login first!'}), 401
+
     data = request.get_json() or {}
-    code = data.get('code','')
-    error_msg = data.get('error','')
-    if not code or not error_msg:
-        return jsonify({'status':'error','error_type':'request','message':'Code and error required'}), 400
+    code = data.get('code', '')
+    error_msg = data.get('error', '')
+    custom_api_key = str(data.get('api_key') or '').strip()
 
-    # Enforce per-user quota
-    user = User.query.get(session['user_id'])
-    reset_usage_if_needed(user)
-    if not increment_usage(user, 'autofix_count'):
-        return jsonify({'status':'error','error_type':'quota','message':'Daily auto-fix quota reached'}), 429
+    active_api_key = custom_api_key if custom_api_key else DEFAULT_GEMINI_API_KEY
+    if not active_api_key:
+        return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
-    prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn only the corrected HTML code without explanation."
     try:
-        fixed_code = call_gemini_model(prompt)
-    except RuntimeError:
-        return jsonify({'status':'error','error_type':'quota','message':'Gemini API quota exceeded'}), 429
+        prompt = f"Fix the JavaScript/HTML error in this code.\nError: {error_msg}\nCode:\n{code}\nReturn ONLY updated raw HTML."
+        fixed_code = call_gemini_model(prompt, api_key=active_api_key)
+        
+        if "```html" in fixed_code:
+            fixed_code = fixed_code.split("```html")[1].split("```")[0].strip()
+        elif "```" in fixed_code:
+            fixed_code = fixed_code.split("```")[1].split("```")[0].strip()
+
+        return jsonify({'status': 'success', 'fixed_code': fixed_code})
     except Exception as e:
-        logger.error(f"Auto-fix error: {e}")
-        return jsonify({'status':'error','error_type':'gemini','message': str(e)}), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-    if "```" in fixed_code:
-        parts = fixed_code.split("```")
-        fixed_code = parts[1] if len(parts)>2 else parts[0]
-    return jsonify({'status':'success','fixed_code': fixed_code})
+# --- HISTORY & DELETE ROUTES ---
 
-# --- History & Deletion ---
-@app.route('/api/history', methods=['GET'])
+@app.route('/history', methods=['GET'])
 def history():
     if 'user_id' not in session:
         return jsonify({'history': []})
+
     user_apps = App.query.filter_by(user_id=session['user_id']).order_by(App.id.desc()).all()
     history_data = [[a.id, a.prompt, a.code] for a in user_apps]
+        
     return jsonify({'history': history_data})
 
-@app.route('/api/history/delete/<int:app_id>', methods=['DELETE'])
+@app.route('/history/delete/<int:app_id>', methods=['DELETE'])
+@app.route('/delete-app/<int:app_id>', methods=['DELETE'])
 def delete_app(app_id):
     if 'user_id' not in session:
-        return jsonify({'status':'error','error_type':'auth','message':'Unauthorized'}), 401
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+
     app_item = App.query.filter_by(id=app_id, user_id=session['user_id']).first()
     if app_item:
-        db.session.delete(app_item); db.session.commit()
-    return jsonify({'status':'success'})
+        db.session.delete(app_item)
+        db.session.commit()
+        
+    return jsonify({'status': 'success'})
 
-@app.route('/api/history/clear', methods=['DELETE'])
+@app.route('/history/clear', methods=['DELETE'])
 def clear_history():
     if 'user_id' not in session:
-        return jsonify({'status':'error','error_type':'auth','message':'Unauthorized'}), 401
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+
     App.query.filter_by(user_id=session['user_id']).delete()
     db.session.commit()
-    return jsonify({'status':'success'})
+        
+    return jsonify({'status': 'success'})
 
-# --- Run Server ---
+# --- MAIN SERVER RUNNER ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Server starting on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    logger.info("Server running on port %s", port)
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )

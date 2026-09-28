@@ -1,6 +1,7 @@
 import os
 import secrets
 import logging
+from datetime import date
 from flask import Flask, send_from_directory, request, jsonify, session
 from flask_cors import CORS
 from importlib import import_module
@@ -117,6 +118,28 @@ class App(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     prompt = db.Column(db.Text, nullable=False)
     code = db.Column(db.Text, nullable=False)
+
+class Usage(db.Model):
+    __tablename__ = 'user_usage'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    usage_date = db.Column(db.Date, nullable=False)
+    new_generations = db.Column(db.Integer, default=0, nullable=False)
+    updates = db.Column(db.Integer, default=0, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'usage_date', name='unique_user_usage_date'),)
+
+NEW_APP_LIMIT = 5
+UPDATE_APP_LIMIT = 3
+
+def get_today_usage(user_id):
+    today = date.today()
+    usage = Usage.query.filter_by(user_id=user_id, usage_date=today).first()
+    if not usage:
+        usage = Usage(user_id=user_id, usage_date=today)
+        db.session.add(usage)
+        db.session.commit()
+    return usage
+
 
 def initialize_database():
     try:
@@ -301,6 +324,15 @@ def generate():
     if not active_api_key:
         return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
+    is_update = bool(previous_code)
+    usage = get_today_usage(session['user_id'])
+
+    if is_update and usage.updates >= UPDATE_APP_LIMIT:
+        return jsonify({'status': 'error', 'code': 'UPDATE_LIMIT_REACHED', 'message': 'Daily update limit reached. You can update an app 3 times per day.'}), 429
+
+    if not is_update and usage.new_generations >= NEW_APP_LIMIT:
+        return jsonify({'status': 'error', 'code': 'NEW_LIMIT_REACHED', 'message': 'Daily new app generation limit reached. You can generate 5 new apps per day.'}), 429
+
     try:
         system_instruction = (
             "You are a World-Class UI/UX & Web Developer.\n"
@@ -328,6 +360,10 @@ def generate():
         try:
             new_app = App(user_id=session['user_id'], prompt=user_prompt, code=generated_code)
             db.session.add(new_app)
+            if is_update:
+                usage.updates += 1
+            else:
+                usage.new_generations += 1
             db.session.commit()
         except Exception as db_err:
             db.session.rollback()

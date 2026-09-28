@@ -28,10 +28,8 @@ app.secret_key = configured_secret
 # 2. Session cookie settings
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SECURE"] = IS_PROD
-app.config["SESSION_COOKIE_SAMESITE"] = (
-    os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
-    if not IS_PROD
-    else os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+app.config["SESSION_COOKIE_SAMESITE"] = os.getenv(
+    "SESSION_COOKIE_SAMESITE", "None" if IS_PROD else "Lax"
 )
 
 # 3. SQL DATABASE CONFIGURATION
@@ -64,6 +62,8 @@ default_origins = [
     "http://localhost:5500",
     "http://127.0.0.1:5000",
     "http://localhost:5000",
+    # PromptForge separate frontend on Render
+    "https://promptforge-studio-frontend.onrender.com",
 ]
 
 configured_origins = os.getenv("FRONTEND_URL") or os.getenv("FRONTEND_ORIGIN") or ""
@@ -134,27 +134,47 @@ initialize_database()
 # --- FIXED GEMINI HELPER FUNCTION ---
 def call_gemini_model(prompt_text, api_key=None):
     key_to_use = api_key if api_key else DEFAULT_GEMINI_API_KEY
-    clean_key = key_to_use.strip().strip("'").strip('"')
-    
+    clean_key = str(key_to_use or "").strip().strip("'").strip('"')
+
     if not clean_key:
         raise ValueError("Gemini API key is missing.")
 
-    # REST transport helps avoid some gRPC metadata issues.
     genai.configure(api_key=clean_key, transport="rest")
 
-    # Current model order. You can override it in Render with GEMINI_MODEL.
-    # Do not use retired 2.0/1.5 models here.
-    configured_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
-    models_to_try = [configured_model]
+    # Do not blindly call retired/hard-coded model names.
+    # Discover models enabled for this API key and keep only models that
+    # support generateContent.
+    configured_model = os.getenv("GEMINI_MODEL", "").strip()
+    candidates = []
 
-    # Small fallback list for projects that do not yet have access to the newest model.
-    for fallback in ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"):
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    if configured_model:
+        candidates.append(configured_model.replace("models/", ""))
+
+    try:
+        available = list(genai.list_models())
+        discovered = []
+        for item in available:
+            methods = getattr(item, "supported_generation_methods", []) or []
+            raw_name = str(getattr(item, "name", ""))
+            model_name = raw_name.replace("models/", "")
+            if model_name and "generateContent" in methods:
+                discovered.append(model_name)
+
+        # Prefer Flash models for speed, then other supported models.
+        discovered.sort(key=lambda name: ("flash" not in name.lower(), name))
+        for name in discovered:
+            if name not in candidates:
+                candidates.append(name)
+    except Exception as discovery_error:
+        logger.warning("Could not discover Gemini models: %s", discovery_error)
+
+    if not candidates:
+        # Safe fallback only if model discovery is unavailable.
+        candidates = ["gemini-2.5-flash"]
 
     last_exception = Exception("No Gemini model responded successfully.")
 
-    for index, model_name in enumerate(models_to_try):
+    for model_name in candidates:
         try:
             logger.info("Trying Gemini model: %s", model_name)
             model = genai.GenerativeModel(model_name)
@@ -165,21 +185,14 @@ def call_gemini_model(prompt_text, api_key=None):
             response_text = getattr(response, "text", None)
             if response_text and response_text.strip():
                 return response_text.strip()
-
             last_exception = RuntimeError(
                 f"Model {model_name} returned an empty response."
             )
-
-        except Exception as e:
-            last_exception = e
-            logger.warning(
-                "Gemini model %s failed: %s",
-                model_name,
-                e
-            )
-            # Continue only when a model is unavailable. For other errors,
-            # trying multiple models can make Render hit its request timeout.
-            error_text = str(e).lower()
+        except Exception as error: 
+            last_exception = error
+            logger.warning("Gemini model %s failed: %s", model_name, error)
+            # Avoid waiting through every model for API-key/quota/network errors.
+            error_text = str(error).lower()
             unavailable = any(term in error_text for term in (
                 "not found", "not supported", "404", "unknown model", "invalid model"
             ))

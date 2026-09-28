@@ -199,7 +199,7 @@
     </div>
 
     <script>
-        const API_BASE_URL = (window.API_BASE_URL ||  "http://127.0.0.1:5000").replace(/\/$/, "");
+        const API_BASE_URL = (window.API_BASE_URL || "https://promptforge-studio.onrender.com").replace(/\/$/, "");
 
         let currentCode = "";
         let historyData = [];
@@ -260,11 +260,11 @@
                         checkUserStatus();
                     }
                 } else {
-                    showErrorToast(data.message || 'Authentication failed!');
+                    showErrorToast(`HTTP ${res.status}: ${data.message || 'Authentication failed!'}`);
                 }
             } catch(err) {
                 console.error("Auth Error:", err);
-                showErrorToast("Network error. Check backend connection.");
+                showErrorToast(`Login failed: ${err.message || "Backend connection failed"}`);
             }
         }
 

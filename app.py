@@ -325,13 +325,19 @@ def generate():
         return jsonify({'status': 'error', 'message': 'Gemini API Key missing!'}), 400
 
     is_update = bool(previous_code)
-    usage = get_today_usage(session['user_id'])
+    is_custom_key = bool(custom_api_key)
+    usage = None
 
-    if is_update and usage.updates >= UPDATE_APP_LIMIT:
-        return jsonify({'status': 'error', 'code': 'UPDATE_LIMIT_REACHED', 'message': 'Daily update limit reached. You can update an app 3 times per day.'}), 429
+    # Daily limits apply only when using the server's Gemini API key.
+    # Users who provide their own API key use their own Gemini quota.
+    if not is_custom_key:
+        usage = get_today_usage(session['user_id'])
 
-    if not is_update and usage.new_generations >= NEW_APP_LIMIT:
-        return jsonify({'status': 'error', 'code': 'NEW_LIMIT_REACHED', 'message': 'Daily new app generation limit reached. You can generate 5 new apps per day.'}), 429
+        if is_update and usage.updates >= UPDATE_APP_LIMIT:
+            return jsonify({'status': 'error', 'code': 'UPDATE_LIMIT_REACHED', 'message': 'Daily update limit reached. You can update an app 3 times per day.'}), 429
+
+        if not is_update and usage.new_generations >= NEW_APP_LIMIT:
+            return jsonify({'status': 'error', 'code': 'NEW_LIMIT_REACHED', 'message': 'Daily new app generation limit reached. You can generate 5 new apps per day.'}), 429
 
     try:
         system_instruction = (
@@ -360,10 +366,11 @@ def generate():
         try:
             new_app = App(user_id=session['user_id'], prompt=user_prompt, code=generated_code)
             db.session.add(new_app)
-            if is_update:
-                usage.updates += 1
-            else:
-                usage.new_generations += 1
+            if not is_custom_key:
+                if is_update:
+                    usage.updates += 1
+                else:
+                    usage.new_generations += 1
             db.session.commit()
         except Exception as db_err:
             db.session.rollback()

@@ -23,6 +23,17 @@
         .view-desktop { width: 100%; height: 100%; transition: width 0.3s ease; }
         .view-tablet { width: 768px; height: 100%; transition: width 0.3s ease; }
         .view-mobile { width: 375px; height: 100%; transition: width 0.3s ease; }
+    
+        @media (max-width: 768px) {
+            body { height: auto; min-height: 100vh; overflow-y: auto; }
+            .main-container { flex-direction: column; height: auto !important; overflow: visible !important; }
+            aside { width: 100% !important; max-height: none !important; }
+            main { min-height: 70vh; overflow: visible !important; }
+            #frameContainer { min-height: 60vh; }
+            #viewControls { display: none; }
+            .view-desktop, .view-tablet, .view-mobile { width: 100% !important; }
+            #historyList { max-height: 180px !important; }
+        }
     </style>
 </head>
 <body class="text-slate-200 h-screen flex flex-col overflow-hidden relative" onload="checkUserStatus();">
@@ -72,7 +83,7 @@
     </header>
 
     <!-- Main Container -->
-    <div class="flex flex-1 h-[calc(100vh-64px)] overflow-hidden">
+    <div class="main-container flex flex-1 h-[calc(100vh-64px)] overflow-hidden">
         
         <!-- Sidebar -->
         <aside class="w-80 glass-card p-4 flex flex-col justify-between border-r border-pink-500/10 shrink-0 overflow-y-auto">
@@ -573,16 +584,26 @@
                 if (search && !String(item[1]).toLowerCase().includes(search)) return;
 
                 const div = document.createElement('div');
-                div.className = 'p-2 rounded-xl glass-card border border-pink-500/10 text-xs hover:border-pink-400/50 transition flex justify-between items-center group';
-                div.innerHTML = `
-                    <span onclick="restoreApp(${index})" class="truncate max-w-[150px] cursor-pointer hover:text-pink-300">
-                        ${item[1]}
-                    </span>
-                    <div class="flex items-center gap-2">
-                        <i onclick="restoreApp(${index})" class="fa-solid fa-arrow-rotate-left text-pink-400 text-[10px] cursor-pointer" title="Restore"></i>
-                        <i onclick="deleteSingleApp(event, ${item[0]})" class="fa-solid fa-trash text-red-400 text-[10px] cursor-pointer hover:text-red-300" title="Delete"></i>
-                    </div>
+                div.className = 'p-2 rounded-xl glass-card border border-pink-500/10 text-xs hover:border-pink-400/50 transition flex justify-between items-center gap-2 group';
+
+                const info = document.createElement('div');
+                info.className = 'min-w-0 flex-1 cursor-pointer';
+                info.onclick = () => restoreApp(index);
+                info.title = item[1];
+                info.innerHTML = `
+                    <div class="text-[10px] font-semibold text-purple-300 mb-0.5">App ${index + 1}</div>
+                    <div class="text-slate-300 hover:text-pink-300 line-clamp-2 break-words leading-4">${item[1]}</div>
                 `;
+
+                const actions = document.createElement('div');
+                actions.className = 'flex items-center gap-2 shrink-0';
+                actions.innerHTML = `
+                    <i onclick="restoreApp(${index})" class="fa-solid fa-arrow-rotate-left text-pink-400 text-[10px] cursor-pointer" title="Restore"></i>
+                    <i onclick="deleteSingleApp(event, ${item[0]})" class="fa-solid fa-trash text-red-400 text-[10px] cursor-pointer hover:text-red-300" title="Delete"></i>
+                `;
+
+                div.appendChild(info);
+                div.appendChild(actions);
                 historyList.appendChild(div);
             });
 
